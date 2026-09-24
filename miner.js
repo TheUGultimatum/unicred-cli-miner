@@ -18,7 +18,7 @@ const arg = (x, d = null) => {
 
 const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
-const HEADLESS = !has('--headed');
+const HEADLESS = has('--headless') ? true : false;
 const STRICT_GPU = !has('--allow-software') && process.env.UNICRED_ALLOW_SOFTWARE !== '1';
 const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
@@ -199,6 +199,7 @@ async function main() {
   console.log('Wallet: ' + wallet.address);
 
   const xvfb = !HEADLESS ? startVirtualDisplay() : null;
+  console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display');
 
   const chromiumArgs = [
     '--no-sandbox',
