@@ -102,7 +102,7 @@ ENABLE_DEVICE_CHOOSER_LAYER=1
 VULKAN_DEVICE_INDEX=<vulkan-index>
 ```
 
-The device chooser approach is commonly used to force a Vulkan application to a selected GPU on multi-GPU Linux systems. citeturn485817search1turn840259search0
+The device chooser approach is commonly used to force a Vulkan application to a selected GPU on multi-GPU Linux systems.
 
 ---
 
@@ -479,9 +479,9 @@ node multi-gpu.js --mine --gpus 0,1 --allow-unpartitioned
 
 # Important technical note
 
-Chrome's WebGPU path is not itself a generic multi-adapter mining framework. Current Chromium documentation notes platform limitations around simultaneous GPU adapters, so this project deliberately uses **separate browser processes** instead of trying to make one page request multiple adapters. citeturn640143search1
+Chrome's WebGPU path is not itself a generic multi-adapter mining framework. Current Chromium documentation notes platform limitations around simultaneous GPU adapters, so this project deliberately uses **separate browser processes** instead of trying to make one page request multiple adapters.
 
-For Linux Vulkan, physical-device selection can be controlled externally before Chromium starts. That is why this branch uses a Vulkan device-selection layer rather than relying only on WebGPU's `powerPreference` option. citeturn840259search0turn840259search5
+For Linux Vulkan, physical-device selection can be controlled externally before Chromium starts. That is why this branch uses a Vulkan device-selection layer rather than relying only on WebGPU's `powerPreference` option.
 
 ---
 
