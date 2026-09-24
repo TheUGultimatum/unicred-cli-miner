@@ -100,11 +100,38 @@ function chromeExecutable() {
 
 function startVirtualDisplay() {
   if (process.env.DISPLAY || !USE_XVFB) return null;
-  const xvfb = spawn('Xvfb', [':99', '-screen', '0', '1440x900x24', '-nolisten', 'tcp'], {
-    stdio: 'ignore',
+
+  // Use a clean, known X11 display for WebGPU. A stale Xvfb process can make
+  // Chromium fail to create its WebGPU context even when Vulkan/nvidia-smi work.
+  spawnSync('pkill', ['-f', 'Xvfb :99'], {stdio: 'ignore'});
+
+  const display = ':99';
+  const xvfb = spawn('Xvfb', [
+    display,
+    '-screen', '0', '1440x900x24',
+    '-ac',
+    '+extension', 'GLX',
+    '+render',
+    '-nolisten', 'tcp'
+  ], {
+    stdio: ['ignore', 'ignore', 'pipe'],
     detached: false
   });
-  process.env.DISPLAY = ':99';
+
+  xvfb.stderr.on('data', data => {
+    const msg = String(data).trim();
+    if (msg) console.log('[Xvfb]', msg);
+  });
+
+  process.env.DISPLAY = display;
+  spawnSync('sh', ['-lc', 'for i in 1 2 3 4 5; do xdpyinfo >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1']);
+
+  if (!execOutput('xdpyinfo', []).includes('dimensions')) {
+    try { xvfb.kill('SIGTERM'); } catch {}
+    delete process.env.DISPLAY;
+    die('Xvfb failed to start a usable X11 display.');
+  }
+
   return xvfb;
 }
 
