@@ -32,13 +32,8 @@ $SUDO apt-get install -y \
   libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
   libxshmfence1 libxss1 libxtst6 libasound2t64 libfontconfig1 libfreetype6 \
   libexpat1 libvulkan1 libvulkan-dev vulkan-tools \
-  meson ninja-build build-essential mesa-vulkan-drivers mesa-utils
+  mesa-vulkan-drivers mesa-utils
 
-for pkg in libglvnd0 nvidia-vulkan-icd; do
-  if apt-cache show "$pkg" >/dev/null 2>&1; then
-    $SUDO apt-get install -y "$pkg" || true
-  fi
-done
 
 echo "[2/6] Checking NVIDIA driver..."
 NVIDIA_OK=0
@@ -101,20 +96,6 @@ chmod 600 "$CONFIG_DIR/config.env.example"
 echo "[6/6] Final GPU/Vulkan checks..."
 echo "--- NVIDIA ---"
 command -v nvidia-smi && nvidia-smi --query-gpu=name,driver_version,memory.total,utilization.gpu --format=csv,noheader || true
-
-echo "--- Vulkan device chooser ---"
-if [[ -f /usr/share/vulkan/implicit_layer.d/vkdevicechooser.json ]]; then
-  echo "vkdevicechooser: installed"
-else
-  echo "WARNING: vkdevicechooser layer manifest not found"
-fi
-
-if command -v vulkaninfo >/dev/null 2>&1; then
-  for i in 0 1; do
-    echo "Vulkan index $i:"
-    ENABLE_DEVICE_CHOOSER_LAYER=1 VULKAN_DEVICE_INDEX="$i" vulkaninfo --summary 2>&1 | grep -E 'deviceName|driverName' | head -n 8 || true
-  done
-fi
 
 echo "--- Vulkan ---"
 command -v vulkaninfo && vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName|apiVersion' | head -n 20 || true
