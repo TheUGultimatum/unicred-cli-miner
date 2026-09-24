@@ -202,10 +202,7 @@ async function runMultiGpuSupervisor() {
       // Mesa's DRI_PRIME form can expose only the selected PCI device to a Vulkan client.
       // If unavailable on this host, the child will print its adapter and we stop rather than
       // pretending both GPUs are independently selected.
-      DRI_PRIME: (() => {
-        const m = String(g.pci || '').match(/([0-9a-fA-F]{4}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$/);
-        return m ? ('pci-' + m[1] + '_' + m[2] + '_' + m[3] + '_' + m[4] + '!') : String(g.index);
-      })(),
+      DRI_PRIME: i === 0 ? (process.env.UNICRED_GPU0_DRI_PRIME || '') : (process.env.UNICRED_GPU1_DRI_PRIME || '1!'),
       __UNICRED_GPU_INDEX: String(g.index)
     };
 
@@ -251,6 +248,8 @@ async function main() {
   console.log('Worker:', WORKER >= 0 ? WORKER : 'single');
   console.log('Requested GPU index:', process.env.__UNICRED_GPU_INDEX || 'auto');
   console.log('DRI_PRIME:', process.env.DRI_PRIME || 'unset');
+  if (WORKER === 0 && !process.env.DRI_PRIME) console.log('Worker 0 uses Vulkan default adapter (expected GPU0).');
+  if (WORKER === 1) console.log('Worker 1 uses DRI_PRIME=1! to expose only the second Vulkan GPU.');
 
   if (gpus.length > 1) {
     console.log('NOTE: This browser instance uses one WebGPU adapter.');
