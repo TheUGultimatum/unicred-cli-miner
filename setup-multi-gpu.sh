@@ -2,10 +2,12 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-WORKDIR="\${ROOT}/.multi-gpu-tools"
+WORKDIR="${ROOT}/.multi-gpu-tools"
 PREFIX="/opt/unicred-vkdevicechooser"
 REPO="https://github.com/aejsmith/vkdevicechooser.git"
 REF="1.0"
+VULKAN_LOADER_REF="vulkan-sdk-1.4.321.0"
+VULKAN_LAYER_HEADER="$WORKDIR/include/vulkan/vk_layer_dispatch_table.h"
 
 if [[ $EUID -eq 0 ]]; then
   SUDO=""
@@ -23,7 +25,22 @@ $SUDO apt-get install -y \
   vulkan-tools libvulkan-dev \
   vulkan-validationlayers vulkan-utility-libraries-dev
 
-mkdir -p "$WORKDIR"
+mkdir -p "$WORKDIR/include/vulkan"
+
+# vkdevicechooser 1.0 includes Vulkan Loader\x27s generated internal dispatch-table
+# header. Ubuntu 24.04\x27s libvulkan-dev does not ship that generated header.
+if [[ ! -s "$VULKAN_LAYER_HEADER" ]]; then
+  echo "[VULKAN] Installing generated Vulkan Loader layer dispatch header..."
+  curl -fsSL \
+    "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Loader/${VULKAN_LOADER_REF}/loader/generated/vk_layer_dispatch_table.h" \
+    -o "$VULKAN_LAYER_HEADER"
+fi
+
+if [[ ! -s "$VULKAN_LAYER_HEADER" ]]; then
+  echo "ERROR: failed to obtain $VULKAN_LAYER_HEADER"
+  exit 1
+fi
+
 
 if [[ ! -d "$WORKDIR/vkdevicechooser/.git" ]]; then
   rm -rf "$WORKDIR/vkdevicechooser"
@@ -40,6 +57,8 @@ if [[ -d "$WORKDIR/build" ]]; then
 fi
 
 echo "[BUILD] Configuring vkdevicechooser..."
+rm -rf "$WORKDIR/build"
+export CXXFLAGS="-I$WORKDIR/include ${CXXFLAGS:-}"
 meson setup "$WORKDIR/build" . --prefix="$PREFIX"
 
 echo "[BUILD] Compiling..."
