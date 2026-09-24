@@ -2,6 +2,7 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
 const { ethers } = require('ethers');
 const { chromium } = require('playwright');
 
@@ -18,7 +19,7 @@ const arg = (x, d = null) => {
 
 const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
-const HEADLESS = has('--headless') ? true : false;
+const HEADLESS = !has('--headed');
 const STRICT_GPU = !has('--allow-software') && process.env.UNICRED_ALLOW_SOFTWARE !== '1';
 const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
@@ -82,6 +83,20 @@ function validatePrivateKey(pk) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) die('Invalid private key format.');
   return pk;
 }
+
+function chromeExecutable() {
+  const candidates = [
+    process.env.CHROME_BIN,
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    chromium.executablePath()
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return chromium.executablePath();
+}
+
 
 function startVirtualDisplay() {
   if (process.env.DISPLAY || !USE_XVFB) return null;
@@ -207,7 +222,7 @@ async function main() {
   console.log('Wallet: ' + wallet.address);
 
   const xvfb = !HEADLESS ? startVirtualDisplay() : null;
-  console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display');
+  console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless-new' : 'X11/virtual-display');
 
   const nvidiaIcd = findNvidiaIcd();
   if (nvidiaIcd) {
@@ -229,8 +244,9 @@ async function main() {
     '--force_high_performance_gpu',
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan,UseOzonePlatform,DefaultANGLEVulkan,VulkanFromANGLE',
+    '--enable-features=Vulkan,UseSkiaRenderer',
     '--use-angle=vulkan',
+    '--disable-vulkan-surface',
     '--disable-features=UseSkiaRenderer',
     ...(HEADLESS ? [] : ['--ozone-platform=x11']),
     '--window-size=1440,900'
@@ -238,7 +254,7 @@ async function main() {
 
   const context = await chromium.launchPersistentContext('', {
     headless: HEADLESS,
-    executablePath: chromium.executablePath(),
+    executablePath: chromeExecutable(),
     viewport: {width:1440, height:900},
     args: chromiumArgs,
     env: {...process.env, ...(process.env.DISPLAY ? {DISPLAY: process.env.DISPLAY} : {})}
