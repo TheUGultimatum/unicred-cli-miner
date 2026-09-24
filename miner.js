@@ -363,11 +363,6 @@ async function main() {
 
   console.log('WebGPU: ' + JSON.stringify(webgpu));
 
-  if (WORKER >= 0 && process.env.__UNICRED_GPU_INDEX !== undefined) {
-    const idx = process.env.__UNICRED_GPU_INDEX;
-    console.log('[GPU SELECT] worker ' + WORKER + ' expected physical GPU ' + idx);
-  }
-
   const adapterText = JSON.stringify(webgpu.adapter || {}).toLowerCase();
   const software = /swiftshader|llvmpipe|software/.test(adapterText);
   const nvidia = /nvidia|geforce|10de/.test(adapterText);
