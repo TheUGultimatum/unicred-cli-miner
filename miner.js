@@ -621,7 +621,7 @@ async function main() {
   }
   page.on('console', msg => {
     const text = msg.text();
-    if (/hashrate|H\/s|GPU|error|mine|mint|wallet|unicorn|difficulty|target/i.test(text)) {
+    if (/hashrate|H\/s|GPU|error|mine|mint|wallet|unicorn|difficulty|target|partition/i.test(text)) {
       console.log('[page] ' + text);
     }
   });
@@ -700,7 +700,7 @@ async function main() {
   console.log('Mining started.');
 
   const startedAt = Date.now();
-  const debugFile = INSPECT_KERNEL
+  const debugFile = (INSPECT_KERNEL || PARTITIONED)
     ? path.resolve(process.env.UNICRED_MULTI_GPU_LOG_DIR || '.multi-gpu-logs', WORKER_ID + '-debug.json')
     : null;
   if (debugFile) fs.mkdirSync(path.dirname(debugFile), {recursive:true});
