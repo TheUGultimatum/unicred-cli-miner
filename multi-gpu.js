@@ -255,6 +255,14 @@ async function main() {
       ' | selected Vulkan devices: ' +
       (selected.length ? selected.map(d => d.name).join(', ') : 'unknown')
     );
+
+    if (MODE !== 'map' && selected.length > 1) {
+      die(
+        'GPU ' + index +
+        ' was not isolated by vkdevicechooser. ' +
+        'Expected one selected Vulkan device, got ' + selected.length + '.'
+      );
+    }
   }
 
   if (MODE === 'probe') {
