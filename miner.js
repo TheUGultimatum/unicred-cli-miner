@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { ethers } = require('ethers');
 const { chromium } = require('playwright');
 
@@ -23,6 +23,7 @@ const STRICT_GPU = !has('--allow-software') && process.env.UNICRED_ALLOW_SOFTWAR
 const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
 const STATS_MS = Math.max(1000, Number(arg('--stats-interval', process.env.UNICRED_STATS_INTERVAL || '5000')));
+const USE_XVFB = process.env.UNICRED_XVFB !== '0';
 
 function die(message) {
   console.error('\nERROR:', message);
@@ -72,6 +73,16 @@ function printGpuStats() {
 function validatePrivateKey(pk) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) die('Invalid private key format.');
   return pk;
+}
+
+function startVirtualDisplay() {
+  if (process.env.DISPLAY || !USE_XVFB) return null;
+  const xvfb = spawn('Xvfb', [':99', '-screen', '0', '1440x900x24', '-nolisten', 'tcp'], {
+    stdio: 'ignore',
+    detached: false
+  });
+  process.env.DISPLAY = ':99';
+  return xvfb;
 }
 
 function providerScript() {
@@ -166,6 +177,8 @@ async function main() {
 
   console.log('Wallet: ' + wallet.address);
 
+  const xvfb = !HEADLESS ? startVirtualDisplay() : null;
+
   const chromiumArgs = [
     '--no-sandbox',
     '--disable-dev-shm-usage',
@@ -175,8 +188,9 @@ async function main() {
     '--force_high_performance_gpu',
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan',
+    '--enable-features=Vulkan,UseOzonePlatform',
     '--use-angle=vulkan',
+    ...(HEADLESS ? [] : ['--ozone-platform=x11']),
     '--window-size=1440,900'
   ];
 
@@ -184,7 +198,8 @@ async function main() {
     headless: HEADLESS,
     executablePath: chromium.executablePath(),
     viewport: {width:1440, height:900},
-    args: chromiumArgs
+    args: chromiumArgs,
+    env: {...process.env, ...(process.env.DISPLAY ? {DISPLAY: process.env.DISPLAY} : {})}
   });
 
   const page = await context.newPage();
@@ -369,6 +384,7 @@ async function main() {
   process.on('SIGINT', async () => {
     console.log('\nStopping miner...');
     await context.close();
+    if (xvfb) xvfb.kill('SIGTERM');
     process.exit(0);
   });
 
