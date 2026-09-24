@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+'use strict';
+
+const { spawnSync } = require('node:child_process');
+
+function execOutput(command, args, env = process.env) {
+  const r = spawnSync(command, args, {
+    encoding: 'utf8',
+    env,
+    maxBuffer: 32 * 1024 * 1024
+  });
+  return r.status === 0 ? r.stdout.trim() : '';
+}
+
+function nvidiaGpus() {
+  const out = execOutput('nvidia-smi', [
+    '--query-gpu=index,name,pci.bus_id,uuid',
+    '--format=csv,noheader'
+  ]);
+  if (!out) return [];
+
+  return out.split(/\r?\n/).filter(Boolean).map(line => {
+    const [index, name, busId, uuid] = line.split(',').map(s => s.trim());
+    return { index: Number(index), name, busId, uuid };
+  });
+}
+
+function parseBusId(busId) {
+  const m = String(busId || '').match(/^(?:0x)?([0-9a-fA-F]+):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$/);
+  if (!m) return null;
+  return {
+    domain: parseInt(m[1], 16),
+    bus: parseInt(m[2], 16),
+    device: parseInt(m[3], 16),
+    func: Number(m[4])
+  };
+}
+
+function parseVulkanDevices() {
+  const out = execOutput('vulkaninfo', []);
+  if (!out) return [];
+
+  const devices = [];
+  const starts = [...out.matchAll(/^GPU(\d+)$/gm)];
+
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i].index;
+    const end = i + 1 < starts.length ? starts[i + 1].index : out.length;
+    const block = out.slice(start, end);
+
+    const get = (key) => {
+      const escaped = key.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
+      const re = new RegExp('(?:^|\\n)\\s*' + escaped + '\\s*=\\s*([^\\n\\r]+)');
+      const m = block.match(re);
+      return m ? m[1].trim() : null;
+    };
+
+    const pci = {
+      domain: Number(get('pciDomain')),
+      bus: Number(get('pciBus')),
+      device: Number(get('pciDevice')),
+      func: Number(get('pciFunction'))
+    };
+
+    devices.push({
+      vulkanIndex: Number(starts[i][1]),
+      name: get('deviceName'),
+      vendorId: get('vendorID'),
+      deviceId: get('deviceID'),
+      uuid: get('deviceUUID'),
+      pci
+    });
+  }
+
+  return devices.filter(d => d.name);
+}
+
+function samePci(a, b) {
+  return a && b &&
+    Number(a.domain) === Number(b.domain) &&
+    Number(a.bus) === Number(b.bus) &&
+    Number(a.device) === Number(b.device) &&
+    Number(a.func) === Number(b.func);
+}
+
+function getGpuMap() {
+  const ng = nvidiaGpus();
+  const vg = parseVulkanDevices();
+
+  return ng.map(n => {
+    const pci = parseBusId(n.busId);
+    const match = vg.find(v => samePci(pci, v.pci));
+    return {
+      ...n,
+      pci,
+      vulkanIndex: match ? match.vulkanIndex : null,
+      vulkanName: match ? match.name : null,
+      vulkanUuid: match ? match.uuid : null
+    };
+  });
+}
+
+function resolveGpuSelection(nvidiaIndex) {
+  const map = getGpuMap();
+  const entry = map.find(g => g.index === Number(nvidiaIndex));
+  if (!entry) {
+    throw new Error('NVIDIA GPU index not found: ' + nvidiaIndex);
+  }
+  if (entry.vulkanIndex == null) {
+    throw new Error(
+      'Could not map NVIDIA GPU ' + nvidiaIndex +
+      ' (' + entry.name + ', ' + entry.busId + ')' +
+      ' to a Vulkan physical device. Run: vulkaninfo'
+    );
+  }
+
+  return {
+    ...entry,
+    env: {
+      ENABLE_DEVICE_CHOOSER_LAYER: '1',
+      VULKAN_DEVICE_INDEX: String(entry.vulkanIndex),
+      CUDA_VISIBLE_DEVICES: String(entry.index)
+    }
+  };
+}
+
+function selectedVulkanDevices(env) {
+  const out = execOutput('vulkaninfo', ['--summary'], env);
+  if (!out) return [];
+
+  const devices = [];
+  const re = /^\s*([^\n]+?)\s+\(ID:\s*(\d+)\)\s*$/gm;
+  let m;
+  while ((m = re.exec(out))) {
+    devices.push({
+      name: m[1].trim(),
+      id: Number(m[2])
+    });
+  }
+
+  if (devices.length) return devices;
+
+  const alt = out.match(/deviceName\s*=\s*([^\n\r]+)/g) || [];
+  return alt.map((line, i) => ({
+    name: line.split('=').slice(1).join('=').trim(),
+    id: i
+  }));
+}
+
+module.exports = {
+  nvidiaGpus,
+  parseVulkanDevices,
+  getGpuMap,
+  resolveGpuSelection,
+  selectedVulkanDevices
+};
