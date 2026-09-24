@@ -19,7 +19,7 @@ const arg = (x, d = null) => {
 
 const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
-const HEADLESS = !has('--headed');
+const HEADLESS = has('--headless');
 const STRICT_GPU = !has('--allow-software') && process.env.UNICRED_ALLOW_SOFTWARE !== '1';
 const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
@@ -238,6 +238,8 @@ async function main() {
   const chromiumArgs = [
     '--no-sandbox',
     '--disable-dev-shm-usage',
+    '--no-first-run',
+    '--no-default-browser-check',
     '--enable-gpu',
     '--ignore-gpu-blocklist',
     '--disable-software-rasterizer',
@@ -245,6 +247,7 @@ async function main() {
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
     '--enable-features=Vulkan,UseSkiaRenderer',
+    '--use-gl=angle',
     '--use-angle=vulkan',
     '--disable-vulkan-surface',
     '--disable-features=UseSkiaRenderer',
