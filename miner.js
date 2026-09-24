@@ -250,100 +250,174 @@ function webGpuInstrumentationScript() {
       dispatches: []
     };
 
-    let attempts = 0;
+    const paramsBuffers = new WeakSet();
+    const seenShaderModules = new WeakSet();
 
-    const installPartitionHook = () => {
+    const installHooks = () => {
       try {
-        if (!partitioned || !window.GPUDevice) {
-          if (attempts++ < 100) setTimeout(installPartitionHook, 100);
-          return;
-        }
+        if (window.GPUDevice && !window.GPUDevice.__unicredHooksInstalled) {
+          const originalShader = window.GPUDevice.prototype.createShaderModule;
+          if (typeof originalShader === 'function') {
+            window.GPUDevice.prototype.createShaderModule = function(desc) {
+              try {
+                if (desc && typeof desc.code === 'string') {
+                  let code = desc.code;
+                  let changed = false;
 
-        if (window.GPUDevice.__unicredPartitionHooked) return;
+                  if (partitioned) {
+                    const re = /let\s+ctr\s*=\s*p\.ctrBase\s*\+\s*gid\.x\s*;/;
+                    if (re.test(code)) {
+                      code = code.replace(
+                        re,
+                        'let ctr = p.ctrBase + gid.x * ' + workerCount + 'u + ' + workerIndex + 'u;'
+                      );
+                      window.__UNICRED_DEBUG.shaderPatched = true;
+                      window.__UNICRED_DEBUG.partitionFormula =
+                        'ctr = ctrBase + gid.x * ' + workerCount + ' + ' + workerIndex;
+                      changed = true;
+                      console.log(
+                        '[PARTITION] patched mining shader: ' +
+                        window.__UNICRED_DEBUG.partitionFormula
+                      );
+                    }
+                  }
 
-        const originalShader = window.GPUDevice.prototype.createShaderModule;
-        if (typeof originalShader !== 'function') {
-          if (attempts++ < 100) setTimeout(installPartitionHook, 100);
-          return;
-        }
+                  if (inspectKernel && !seenShaderModules.has(desc)) {
+                    seenShaderModules.add(desc);
+                    window.__UNICRED_DEBUG.shaders.push({
+                      t: Date.now(),
+                      label: desc.label || null,
+                      originalCode: desc.code.slice(0, 1000000),
+                      code: code.slice(0, 1000000)
+                    });
+                  }
 
-        window.GPUDevice.prototype.createShaderModule = function(desc) {
-          try {
-            if (desc && typeof desc.code === 'string') {
-              const re = /let\\s+ctr\\s*=\\s*p\\.ctrBase\\s*\\+\\s*gid\\.x\\s*;/;
-
-              if (re.test(desc.code)) {
-                const code = desc.code.replace(
-                  re,
-                  'let ctr = p.ctrBase + gid.x * ' +
-                    workerCount + 'u + ' + workerIndex + 'u;'
-                );
-
-                window.__UNICRED_DEBUG.shaderPatched = true;
-                window.__UNICRED_DEBUG.partitionFormula =
-                  'ctr = ctrBase + gid.x * ' + workerCount + ' + ' + workerIndex;
-
-                console.log(
-                  '[PARTITION] patched mining shader: ' +
-                  window.__UNICRED_DEBUG.partitionFormula
-                );
-
-                return originalShader.call(this, {...desc, code});
+                  if (changed) {
+                    return originalShader.call(this, {...desc, code});
+                  }
+                }
+              } catch (e) {
+                console.log('[PARTITION] shader hook error: ' + e.message);
               }
-            }
-          } catch (e) {
-            console.log('[PARTITION] shader hook error: ' + e.message);
+              return originalShader.apply(this, arguments);
+            };
           }
 
-          return originalShader.apply(this, arguments);
-        };
-
-        window.GPUDevice.__unicredPartitionHooked = true;
-      } catch (e) {
-        console.log('[PARTITION] hook install error: ' + e.message);
-        if (attempts++ < 100) setTimeout(installPartitionHook, 100);
-      }
-    };
-
-    const installInspectHooks = () => {
-      if (!inspectKernel || partitioned) return;
-
-      try {
-        if (window.GPUDevice && !window.GPUDevice.__unicredInspectHooked) {
           const originalBindGroup = window.GPUDevice.prototype.createBindGroup;
           if (typeof originalBindGroup === 'function') {
             window.GPUDevice.prototype.createBindGroup = function(desc) {
+              try {
+                if (desc && Array.isArray(desc.entries)) {
+                  for (const entry of desc.entries) {
+                    if (entry && entry.binding === 1 && entry.resource && entry.resource.buffer) {
+                      paramsBuffers.add(entry.resource.buffer);
+                    }
+                  }
+                }
+              } catch {}
               return originalBindGroup.apply(this, arguments);
             };
           }
-          window.GPUDevice.__unicredInspectHooked = true;
+
+          window.GPUDevice.__unicredHooksInstalled = true;
+
+          // Partitioned mining only needs the shader rewrite.
+          // Do not install diagnostic queue/crypto hooks during live mining.
+          if (partitioned) return;
         }
 
-        if (window.GPUQueue && !window.GPUQueue.__unicredInspectHooked) {
+        if (window.GPUQueue && !window.GPUQueue.__unicredHooksInstalled) {
           const originalSubmit = window.GPUQueue.prototype.submit;
           if (typeof originalSubmit === 'function') {
             window.GPUQueue.prototype.submit = function(commandBuffers) {
-              window.__UNICRED_DEBUG.queueSubmitCount +=
-                Array.isArray(commandBuffers) ? commandBuffers.length : 1;
+              window.__UNICRED_DEBUG.queueSubmitCount += Array.isArray(commandBuffers) ? commandBuffers.length : 1;
               return originalSubmit.apply(this, arguments);
             };
           }
-          window.GPUQueue.__unicredInspectHooked = true;
+
+          const originalWriteBuffer = window.GPUQueue.prototype.writeBuffer;
+          if (typeof originalWriteBuffer === 'function') {
+            window.GPUQueue.prototype.writeBuffer = function(buffer, bufferOffset, data, dataOffset, size) {
+              try {
+                if (paramsBuffers.has(buffer)) {
+                  let bytes = null;
+                  if (ArrayBuffer.isView(data)) {
+                    bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                  } else if (data instanceof ArrayBuffer) {
+                    bytes = new Uint8Array(data);
+                  }
+
+                  if (bytes && bytes.byteLength >= 16) {
+                    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                    const ctrBase = view.getUint32(4, true);
+
+                    if (window.__UNICRED_DEBUG.paramsWrites.length < 32) {
+                      window.__UNICRED_DEBUG.paramsWrites.push({
+                        t: Date.now(),
+                        ctrBase,
+                        hiSw: view.getUint32(0, true),
+                        tHi: view.getUint32(8, true),
+                        tLo: view.getUint32(12, true)
+                      });
+                    }
+
+                    if (window.__UNICRED_DEBUG.paramsWrites.length <= 3) {
+                      console.log('[PARTITION] Params ctrBase=' + ctrBase);
+                    }
+                  }
+                }
+              } catch {}
+              return originalWriteBuffer.apply(this, arguments);
+            };
+          }
+
+          window.GPUQueue.__unicredHooksInstalled = true;
+        }
+
+        if (window.GPUComputePassEncoder && !window.GPUComputePassEncoder.__unicredHooksInstalled) {
+          const originalDispatch = window.GPUComputePassEncoder.prototype.dispatchWorkgroups;
+          if (typeof originalDispatch === 'function') {
+            window.GPUComputePassEncoder.prototype.dispatchWorkgroups = function(x, y=1, z=1) {
+              if (window.__UNICRED_DEBUG.dispatches.length < 32) {
+                window.__UNICRED_DEBUG.dispatches.push({
+                  t: Date.now(),
+                  x, y, z,
+                  countersPerDispatch: Number(x) * 256
+                });
+              }
+              return originalDispatch.apply(this, arguments);
+            };
+          }
+          window.GPUComputePassEncoder.__unicredHooksInstalled = true;
+        }
+
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function' &&
+            !window.crypto.__unicredRandomHooked) {
+          const originalRandom = window.crypto.getRandomValues.bind(window.crypto);
+          window.crypto.getRandomValues = function(view) {
+            const out = originalRandom(view);
+            window.__UNICRED_DEBUG.randomCalls++;
+            if (window.__UNICRED_DEBUG.randomSamples.length < 32) {
+              try {
+                window.__UNICRED_DEBUG.randomSamples.push({
+                  t: Date.now(),
+                  length: view.byteLength || 0,
+                  bytes: Array.from(new Uint8Array(view.buffer, view.byteOffset, Math.min(view.byteLength, 64)))
+                });
+              } catch {}
+            }
+            return out;
+          };
+          window.__unicredRandomHooked = true;
         }
       } catch (e) {
-        console.log('[DEBUG] inspect hook error: ' + e.message);
+        console.log('[PARTITION] instrumentation error: ' + e.message);
       }
     };
 
-    if (partitioned) {
-      installPartitionHook();
-    }
-
-    if (inspectKernel && !partitioned) {
-      installInspectHooks();
-      setInterval(installInspectHooks, 500);
-    }
-  })();\`;
+    installHooks();
+    if (!partitioned) setInterval(installHooks, 100);
+  })();`;
 }
 
 async function main() {
