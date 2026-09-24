@@ -206,10 +206,11 @@ function launchWorker(gpuIndex, workerPosition, workerCount) {
 
       const partitionMatch = line.match(/\[PARTITION\]\s+Params ctrBase=(\d+)/i);
       if (partitionMatch) {
-        state.firstCtrBase = state.firstCtrBase ?? Number(partitionMatch[1]);
-        state.lastCtrBase = Number(partitionMatch[1]);
-        if (workers.every(w => Number.isFinite(w.firstCtrBase))) {
-          const bases = workers.map(w => w.firstCtrBase);
+        const ctrBase = Number(partitionMatch[1]);
+        state.firstCtrBase = state.firstCtrBase ?? ctrBase;
+        state.lastCtrBase = ctrBase;
+        if (workers.every(w => Number.isFinite(w.lastCtrBase))) {
+          const bases = workers.map(w => w.lastCtrBase);
           if (new Set(bases).size !== 1) {
             console.log('\n[COORDINATOR] Different ctrBase values detected across workers. Stopping instead of assuming independent work. bases=' + bases.join(','));
             stopAll(workers, 'ctrBase mismatch');
