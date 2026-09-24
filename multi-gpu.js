@@ -24,6 +24,7 @@ const ALLOW_UNPARTITIONED = has('--allow-unpartitioned');
 const HEADLESS = has('--headless');
 const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
+const INSPECT_KERNEL = has('--inspect-kernel');
 
 function die(message) {
   console.error('\nERROR:', message);
