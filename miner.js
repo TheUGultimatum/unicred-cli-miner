@@ -24,6 +24,9 @@ const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
 const STATS_MS = Math.max(1000, Number(arg('--stats-interval', process.env.UNICRED_STATS_INTERVAL || '5000')));
 const USE_XVFB = process.env.UNICRED_XVFB !== '0';
+const MULTI = has('--multi') || process.env.UNICRED_MULTI_GPU === '1';
+const WORKER = Number(arg('--worker', process.env.UNICRED_WORKER_INDEX ?? '-1'));
+const WORKER_COUNT = Math.max(1, Number(arg('--workers', process.env.UNICRED_WORKERS || '1')));
 
 function die(message) {
   console.error('\nERROR:', message);
@@ -47,6 +50,21 @@ function gpuRows() {
       index: p[0], name: p[1], driver: p[2],
       memUsed: p[3], memTotal: p[4], util: p[5],
       temp: p[6], power: p[7]
+    };
+  });
+}
+
+function gpuInventory() {
+  const out = execOutput('nvidia-smi', [
+    '--query-gpu=index,pci.bus_id,name,driver_version,memory.total,utilization.gpu,temperature.gpu,power.draw',
+    '--format=csv,noheader,nounits'
+  ]);
+  if (!out) return [];
+  return out.split('\n').map(line => {
+    const p = line.split(',').map(s => s.trim());
+    return {
+      index: p[0], pci: p[1], name: p[2], driver: p[3],
+      memTotal: p[4], util: p[5], temp: p[6], power: p[7]
     };
   });
 }
@@ -83,6 +101,31 @@ function startVirtualDisplay() {
   });
   process.env.DISPLAY = ':99';
   return xvfb;
+}
+
+async function assertAffordableMint(rpc, tx, wallet) {
+  const balance = await rpc.getBalance(wallet.address);
+  const value = BigInt(tx.value || 0);
+  let gasLimit = tx.gasLimit ? BigInt(tx.gasLimit) : 0n;
+  if (!gasLimit) gasLimit = await rpc.estimateGas({...tx, from: wallet.address});
+
+  const fee = await rpc.getFeeData();
+  const gasPrice = tx.gasPrice ? BigInt(tx.gasPrice) : (fee.maxFeePerGas || fee.gasPrice || 0n);
+  const worstCase = value + gasLimit * gasPrice;
+
+  console.log('[MINT] Balance:', ethers.formatEther(balance), 'ETH');
+  console.log('[MINT] Value:', ethers.formatEther(value), 'ETH');
+  console.log('[MINT] Gas limit:', gasLimit.toString());
+  console.log('[MINT] Estimated max cost:', ethers.formatEther(worstCase), 'ETH');
+
+  if (balance < worstCase) {
+    throw new Error(
+      'Insufficient Unichain ETH for mint + gas. Need about ' +
+      ethers.formatEther(worstCase) + ' ETH, wallet has ' +
+      ethers.formatEther(balance) + ' ETH.'
+    );
+  }
+  return {balance, value, gasLimit, worstCase};
 }
 
 function providerScript() {
@@ -140,15 +183,71 @@ async function selectGpuMode(page) {
   console.log('[MODE] After GPU click:', JSON.stringify(after));
 }
 
+async function runMultiGpuSupervisor() {
+  const gpus = gpuInventory();
+  const count = Math.min(WORKER_COUNT, gpus.length);
+  if (count < 2) die('Multi-GPU mode requested but fewer than 2 NVIDIA GPUs were detected.');
+
+  console.log('Starting ' + count + ' isolated WebGPU workers.');
+
+  const { spawn } = require('node:child_process');
+  const children = [];
+
+  for (let i = 0; i < count; i++) {
+    const g = gpus[i];
+    const env = {
+      ...process.env,
+      UNICRED_WORKER_INDEX: String(i),
+      UNICRED_MULTI_GPU: '0',
+      // Mesa's DRI_PRIME form can expose only the selected PCI device to a Vulkan client.
+      // If unavailable on this host, the child will print its adapter and we stop rather than
+      // pretending both GPUs are independently selected.
+      DRI_PRIME: g.pci ? ('pci-' + g.pci.replace(/^0000:/, '').replace(/:/g, '_').replace(/\./g, '_') + '!') : (g.index),
+      __UNICRED_GPU_INDEX: String(g.index)
+    };
+
+    const childArgs = process.argv.slice(1).filter(x => !['--multi'].includes(x));
+    if (!childArgs.includes('--worker')) childArgs.push('--worker', String(i));
+    const child = spawn(process.execPath, childArgs, { env, stdio: 'inherit' });
+    children.push(child);
+
+    console.log('[SUPERVISOR] GPU' + g.index + ' -> worker ' + i + ' PCI ' + g.pci);
+  }
+
+  const shutdown = () => {
+    for (const child of children) {
+      if (!child.killed) child.kill('SIGINT');
+    }
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  await Promise.all(children.map(child => new Promise(resolve => {
+    child.on('exit', (code, signal) => {
+      console.log('[SUPERVISOR] worker exited:', {code, signal});
+      resolve();
+    });
+  })));
+}
+
 async function main() {
+  if (MULTI && WORKER < 0) {
+    await runMultiGpuSupervisor();
+    return;
+  }
+
   console.clear();
   console.log('====================================================');
   console.log('              UNICRED VAST GPU MINER');
   console.log('====================================================');
 
   const gpus = printGpuStats();
+      if (WORKER >= 0) console.log('[WORKER] GPU index ' + (process.env.__UNICRED_GPU_INDEX || '?') + ' stats above');
   if (!gpus.length) die('No NVIDIA GPU detected.');
   console.log('Detected NVIDIA GPUs: ' + gpus.length);
+  console.log('Worker:', WORKER >= 0 ? WORKER : 'single');
+  console.log('Requested GPU index:', process.env.__UNICRED_GPU_INDEX || 'auto');
+  console.log('DRI_PRIME:', process.env.DRI_PRIME || 'unset');
 
   if (gpus.length > 1) {
     console.log('NOTE: This browser instance uses one WebGPU adapter.');
@@ -262,15 +361,40 @@ async function main() {
 
     if (method === 'eth_sendTransaction') {
       if (!AUTO_SUBMIT || DRY_RUN) throw new Error('Transaction blocked. Use --submit to enable.');
+
       const tx = {...(params?.[0] || {})};
       delete tx.from;
       if (tx.gas) {
         tx.gasLimit = BigInt(tx.gas);
         delete tx.gas;
       }
+
+      await assertAffordableMint(rpc, tx, wallet);
+
       const sent = await wallet.sendTransaction(tx);
-      console.log('TX: ' + sent.hash);
+      console.log('TX SENT: ' + sent.hash);
+
+      // Keep the process/page informed about confirmation.
+      try {
+        const receipt = await sent.wait(1);
+        console.log('[MINT] Confirmed in block ' + receipt.blockNumber + ' status=' + receipt.status);
+      } catch (e) {
+        console.log('[MINT] Receipt wait failed:', e.message);
+      }
+
       return sent.hash;
+    }
+
+    if (method === 'eth_signTypedData_v4' || method === 'eth_signTypedData') {
+      if (!AUTO_SUBMIT || DRY_RUN) throw new Error('Typed-data signing blocked. Use --submit to enable.');
+      const p = params || [];
+      const typed = typeof p[p.length - 1] === 'string'
+        ? JSON.parse(p[p.length - 1])
+        : p[p.length - 1];
+      const domain = typed.domain || {};
+      const types = {...typed.types};
+      delete types.EIP712Domain;
+      return wallet.signTypedData(domain, types, typed.message);
     }
 
     if (method === 'eth_sendRawTransaction') {
@@ -316,6 +440,11 @@ async function main() {
   });
 
   console.log('WebGPU: ' + JSON.stringify(webgpu));
+
+  if (WORKER >= 0 && process.env.__UNICRED_GPU_INDEX !== undefined) {
+    const idx = process.env.__UNICRED_GPU_INDEX;
+    console.log('[GPU SELECT] worker ' + WORKER + ' expected physical GPU ' + idx);
+  }
 
   const adapterText = JSON.stringify(webgpu.adapter || {}).toLowerCase();
   const software = /swiftshader|llvmpipe|software/.test(adapterText);
