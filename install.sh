@@ -31,7 +31,7 @@ $SUDO apt-get install -y \
   libcups2t64 libdrm2 libgbm1 libgtk-3-0t64 libx11-6 libx11-xcb1 libxcb1 \
   libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
   libxshmfence1 libxss1 libxtst6 libasound2t64 libfontconfig1 libfreetype6 \
-  libexpat1 libvulkan1 libvulkan-dev vulkan-tools vulkan-validationlayers-dev \
+  libexpat1 libvulkan1 libvulkan-dev vulkan-tools \
   meson ninja-build build-essential mesa-vulkan-drivers mesa-utils
 
 for pkg in libglvnd0 nvidia-vulkan-icd; do
@@ -80,6 +80,25 @@ echo "[4/6] Installing project dependencies..."
 rm -rf node_modules
 npm install
 
+echo "[5/7] Preparing Vulkan layer headers and device chooser..."
+
+# Ubuntu 24.04/Noble currently ships libvulkan-dev but may not ship
+# vulkan-validationlayers-dev in the configured repositories. vkdevicechooser
+# only needs the generated Vulkan layer dispatch header from the Vulkan Loader.
+VK_HEADER="/usr/local/include/vulkan/vk_layer_dispatch_table.h"
+if [[ ! -f "$VK_HEADER" ]]; then
+  echo "Installing Vulkan layer dispatch header..."
+  $SUDO mkdir -p /usr/local/include/vulkan
+  $SUDO curl -fL --retry 3     "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Loader/v1.3.275/loader/generated/vk_layer_dispatch_table.h"     -o "$VK_HEADER"
+fi
+
+if [[ ! -f /usr/include/vulkan/vulkan.h || ! -f /usr/include/vulkan/vk_layer.h || ! -f "$VK_HEADER" ]]; then
+  echo "ERROR: Required Vulkan headers are missing."
+  ls -la /usr/include/vulkan 2>/dev/null || true
+  ls -la /usr/local/include/vulkan 2>/dev/null || true
+  exit 1
+fi
+
 echo "[5/7] Installing Vulkan device-chooser layer..."
 VKCHOOSER_DIR="/opt/vkdevicechooser"
 if [[ ! -d "$VKCHOOSER_DIR/.git" ]]; then
@@ -89,7 +108,8 @@ fi
 (
   cd "$VKCHOOSER_DIR"
   rm -rf builddir
-  meson setup builddir --prefix=/usr
+  meson setup builddir --prefix=/usr -Dc_args=-I/usr/local/include -Dcpp_args=-I/usr/local/include
+
   meson compile -C builddir
   $SUDO meson install -C builddir
 )
@@ -116,6 +136,12 @@ echo "--- NVIDIA ---"
 command -v nvidia-smi && nvidia-smi --query-gpu=name,driver_version,memory.total,utilization.gpu --format=csv,noheader || true
 
 echo "--- Vulkan device chooser ---"
+if [[ -f /usr/share/vulkan/implicit_layer.d/vkdevicechooser.json ]]; then
+  echo "vkdevicechooser: installed"
+else
+  echo "WARNING: vkdevicechooser layer manifest not found"
+fi
+
 if command -v vulkaninfo >/dev/null 2>&1; then
   for i in 0 1; do
     echo "Vulkan index $i:"
