@@ -35,6 +35,14 @@ function execOutput(command, args) {
   return r.status === 0 ? r.stdout.trim() : '';
 }
 
+function findNvidiaIcd() {
+  const out = execOutput('sh', ['-lc',
+    "for f in /usr/share/vulkan/icd.d/*nvidia*.json /etc/vulkan/icd.d/*nvidia*.json; do [ -f \"$f\" ] && echo \"$f\"; done | head -n 1"
+  ]);
+  return out || null;
+}
+
+
 function gpuRows() {
   const out = execOutput('nvidia-smi', [
     '--query-gpu=index,name,driver_version,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw',
@@ -201,6 +209,17 @@ async function main() {
   const xvfb = !HEADLESS ? startVirtualDisplay() : null;
   console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display');
 
+  const nvidiaIcd = findNvidiaIcd();
+  if (nvidiaIcd) {
+    console.log('NVIDIA Vulkan ICD:', nvidiaIcd);
+    process.env.VK_ICD_FILENAMES = nvidiaIcd;
+    process.env.VK_DRIVER_FILES = nvidiaIcd;
+    process.env.__GLX_VENDOR_LIBRARY_NAME = 'nvidia';
+    process.env.NVIDIA_DRIVER_CAPABILITIES = process.env.NVIDIA_DRIVER_CAPABILITIES || 'all';
+  } else {
+    console.log('NVIDIA Vulkan ICD: not found in standard locations');
+  }
+
   const chromiumArgs = [
     '--no-sandbox',
     '--disable-dev-shm-usage',
@@ -210,8 +229,9 @@ async function main() {
     '--force_high_performance_gpu',
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan,UseOzonePlatform',
+    '--enable-features=Vulkan,UseOzonePlatform,DefaultANGLEVulkan,VulkanFromANGLE',
     '--use-angle=vulkan',
+    '--disable-features=UseSkiaRenderer',
     ...(HEADLESS ? [] : ['--ozone-platform=x11']),
     '--window-size=1440,900'
   ];
