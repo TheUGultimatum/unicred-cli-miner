@@ -2,8 +2,11 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 const { ethers } = require('ethers');
 const { chromium } = require('playwright');
+const { resolveGpuSelection } = require('./gpu-affinity');
 
 const SITE = 'https://unicred.fun/';
 const RPC_URL = process.env.UNICRED_RPC_URL || 'https://mainnet.unichain.org';
@@ -24,6 +27,11 @@ const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
 const STATS_MS = Math.max(1000, Number(arg('--stats-interval', process.env.UNICRED_STATS_INTERVAL || '5000')));
 const USE_XVFB = process.env.UNICRED_XVFB !== '0';
+const GPU_INDEX_RAW = arg('--gpu-index', process.env.UNICRED_GPU_INDEX);
+const GPU_INDEX = GPU_INDEX_RAW == null ? null : Number(GPU_INDEX_RAW);
+const WORKER_ID = arg('--worker-id', process.env.UNICRED_WORKER_ID || 'single');
+const PROBE_ONLY = has('--probe-only') || process.env.UNICRED_PROBE_ONLY === '1';
+const INSPECT_KERNEL = has('--inspect-kernel') || process.env.UNICRED_INSPECT_KERNEL === '1';
 
 function die(message) {
   console.error('\nERROR:', message);
@@ -75,13 +83,13 @@ function validatePrivateKey(pk) {
   return pk;
 }
 
-function startVirtualDisplay() {
+function startVirtualDisplay(display=':99') {
   if (process.env.DISPLAY || !USE_XVFB) return null;
-  const xvfb = spawn('Xvfb', [':99', '-screen', '0', '1440x900x24', '-nolisten', 'tcp'], {
+  const xvfb = spawn('Xvfb', [display, '-screen', '0', '1440x900x24', '-nolisten', 'tcp'], {
     stdio: 'ignore',
     detached: false
   });
-  process.env.DISPLAY = ':99';
+  process.env.DISPLAY = display;
   return xvfb;
 }
 
@@ -217,6 +225,76 @@ async function selectGpuMode(page) {
   console.log('[MODE] After GPU click:', JSON.stringify(after));
 }
 
+
+function debugInitScript() {
+  return String.raw\`(()=> {
+    window.__UNICRED_DEBUG = {
+      startedAt: Date.now(),
+      shaders: [],
+      queueSubmitCount: 0,
+      randomCalls: 0,
+      randomSamples: []
+    };
+
+    const installGpuHooks = () => {
+      try {
+        if (window.GPUDevice && !window.GPUDevice.__unicredHooked) {
+          const original = window.GPUDevice.prototype.createShaderModule;
+          if (typeof original === 'function') {
+            window.GPUDevice.prototype.createShaderModule = function(desc) {
+              try {
+                if (desc && typeof desc.code === 'string') {
+                  window.__UNICRED_DEBUG.shaders.push({
+                    t: Date.now(),
+                    label: desc.label || null,
+                    code: desc.code.slice(0, 1000000)
+                  });
+                }
+              } catch {}
+              return original.apply(this, arguments);
+            };
+            window.GPUDevice.__unicredHooked = true;
+          }
+        }
+
+        if (window.GPUQueue && !window.GPUQueue.__unicredHooked) {
+          const originalSubmit = window.GPUQueue.prototype.submit;
+          if (typeof originalSubmit === 'function') {
+            window.GPUQueue.prototype.submit = function() {
+              window.__UNICRED_DEBUG.queueSubmitCount++;
+              return originalSubmit.apply(this, arguments);
+            };
+            window.GPUQueue.__unicredHooked = true;
+          }
+        }
+
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function' &&
+            !window.crypto.__unicredHooked) {
+          const originalRandom = window.crypto.getRandomValues.bind(window.crypto);
+          window.crypto.getRandomValues = function(view) {
+            const out = originalRandom(view);
+            window.__UNICRED_DEBUG.randomCalls++;
+            if (window.__UNICRED_DEBUG.randomSamples.length < 32) {
+              try {
+                window.__UNICRED_DEBUG.randomSamples.push({
+                  t: Date.now(),
+                  length: view.byteLength || 0,
+                  bytes: Array.from(new Uint8Array(view.buffer, view.byteOffset, Math.min(view.byteLength, 64)))
+                });
+              } catch {}
+            }
+            return out;
+          };
+          window.crypto.__unicredHooked = true;
+        }
+      } catch {}
+    };
+
+    installGpuHooks();
+    setInterval(installGpuHooks, 250);
+  })();\`;
+}
+
 async function main() {
   console.clear();
   console.log('====================================================');
@@ -225,6 +303,20 @@ async function main() {
 
   const gpus = printGpuStats();
   if (!gpus.length) die('No NVIDIA GPU detected.');
+
+  let gpuSelection = null;
+  if (GPU_INDEX_RAW != null) {
+    if (!Number.isInteger(GPU_INDEX) || GPU_INDEX < 0) {
+      die('Invalid --gpu-index: ' + GPU_INDEX_RAW);
+    }
+    gpuSelection = resolveGpuSelection(GPU_INDEX);
+    console.log(
+      '[AFFINITY] NVIDIA GPU ' + gpuSelection.index +
+      ' → Vulkan index ' + gpuSelection.vulkanIndex +
+      ' → ' + gpuSelection.name +
+      ' | PCI ' + gpuSelection.busId
+    );
+  }
   console.log('Detected NVIDIA GPUs: ' + gpus.length);
   if (gpus.length > 1) {
     console.log('NOTE: Single-GPU mode enabled. Using the default/high-performance NVIDIA adapter only.');
@@ -255,8 +347,15 @@ async function main() {
     console.log('[MINT] Signer provider: attached to Unichain RPC');
   }
 
-  const xvfb = !HEADLESS ? startVirtualDisplay() : null;
-  console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display');
+  const display = GPU_INDEX == null ? ':99' : ':' + (99 + GPU_INDEX);
+  const xvfb = !HEADLESS ? startVirtualDisplay(display) : null;
+  const browserEnv = {...process.env};
+  if (gpuSelection) Object.assign(browserEnv, gpuSelection.env);
+  console.log(
+    'DISPLAY:', process.env.DISPLAY || 'unset',
+    '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display',
+    '| worker:', WORKER_ID
+  );
 
   const chromiumArgs = [
     '--no-sandbox',
@@ -278,7 +377,7 @@ async function main() {
     executablePath: chromium.executablePath(),
     viewport: {width:1440, height:900},
     args: chromiumArgs,
-    env: {...process.env, ...(process.env.DISPLAY ? {DISPLAY: process.env.DISPLAY} : {})}
+    env: browserEnv
   });
 
   const page = await context.newPage();
@@ -392,6 +491,10 @@ async function main() {
   });
 
   await page.addInitScript({content:providerScript()});
+  if (INSPECT_KERNEL) {
+    await page.addInitScript({content:debugInitScript()});
+    console.log('[DEBUG] Kernel instrumentation enabled for worker ' + WORKER_ID);
+  }
   page.on('console', msg => {
     const text = msg.text();
     if (/hashrate|H\/s|GPU|error|mine|mint|wallet|unicorn|difficulty|target/i.test(text)) {
@@ -432,6 +535,20 @@ async function main() {
     die('WebGPU is not using an NVIDIA hardware adapter. Refusing software rendering.');
   }
 
+  if (gpuSelection) {
+    console.log(
+      '[AFFINITY] WebGPU adapter for worker ' + WORKER_ID + ': ' +
+      JSON.stringify(webgpu.adapter)
+    );
+  }
+
+  if (PROBE_ONLY) {
+    console.log('[PROBE] WebGPU affinity probe passed for worker ' + WORKER_ID + '.');
+    await context.close();
+    if (xvfb) xvfb.kill('SIGTERM');
+    process.exit(0);
+  }
+
   await page.waitForTimeout(4000);
 
   const connect = page.getByRole('button', {name:/connect wallet/i}).first();
@@ -459,6 +576,10 @@ async function main() {
   console.log('Mining started.');
 
   const startedAt = Date.now();
+  const debugFile = INSPECT_KERNEL
+    ? path.resolve(process.env.UNICRED_MULTI_GPU_LOG_DIR || '.multi-gpu-logs', WORKER_ID + '-debug.json')
+    : null;
+  if (debugFile) fs.mkdirSync(path.dirname(debugFile), {recursive:true});
 
   setInterval(async () => {
     try {
@@ -475,7 +596,7 @@ async function main() {
       console.log('[STATS] expected  ' + metrics.expected);
       console.log('[STATS] streak    ' + metrics.streak);
       console.log('[STATS] difficulty ' + metrics.difficulty);
-      console.log('[STATS] WebGPU ' + (webgpu.adapter.description || webgpu.adapter.vendor || 'NVIDIA'));
+      console.log('[STATS] WebGPU ' + (webgpu.adapter.description || webgpu.adapter.vendor || 'NVIDIA') + (GPU_INDEX != null ? ' | GPU ' + GPU_INDEX : ''));
       const gpuRowsNow = printGpuStats();
       if (gpuRowsNow.length === 1) {
         const g = gpuRowsNow[0];
@@ -483,6 +604,17 @@ async function main() {
         const power = Number(g.power);
         if (uptime >= 20 && (util < 20 || power < 100)) {
           console.log('[WARN] GPU load is low for a 5090: util=' + util + '% power=' + power + 'W. Check the actual mining mode/workload.');
+        }
+      }
+
+      if (INSPECT_KERNEL) {
+        try {
+          const debug = await page.evaluate(() => window.__UNICRED_DEBUG || null);
+          if (debugFile && debug) {
+            fs.writeFileSync(debugFile, JSON.stringify(debug, null, 2));
+          }
+        } catch (error) {
+          console.log('[DEBUG ERROR] ' + error.message);
         }
       }
 
