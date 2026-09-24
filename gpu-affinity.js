@@ -37,11 +37,11 @@ function parseBusId(busId) {
 }
 
 function parseVulkanDevices() {
-  const out = execOutput('vulkaninfo', []);
+  const out = execOutput('vulkaninfo', ['--summary']);
   if (!out) return [];
 
   const devices = [];
-  const starts = [...out.matchAll(/^GPU(\d+)$/gm)];
+  const starts = [...out.matchAll(/^\s*GPU(\d+):\s*$/gm)];
 
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i].index;
@@ -55,26 +55,23 @@ function parseVulkanDevices() {
       return m ? m[1].trim() : null;
     };
 
-    const pci = {
-      domain: Number(get('pciDomain')),
-      bus: Number(get('pciBus')),
-      device: Number(get('pciDevice')),
-      func: Number(get('pciFunction'))
-    };
-
     devices.push({
       vulkanIndex: Number(starts[i][1]),
       name: get('deviceName'),
       vendorId: get('vendorID'),
       deviceId: get('deviceID'),
-      uuid: get('deviceUUID'),
-      pci
+      uuid: get('deviceUUID')
     });
   }
 
   return devices.filter(d => d.name);
 }
 
+function getVulkanNvidiaDevices() {
+  return parseVulkanDevices()
+    .filter(d => /^0x10de$/i.test(String(d.vendorId || '')))
+    .sort((a, b) => a.vulkanIndex - b.vulkanIndex);
+}
 function samePci(a, b) {
   return a && b &&
     Number(a.domain) === Number(b.domain) &&
@@ -85,17 +82,18 @@ function samePci(a, b) {
 
 function getGpuMap() {
   const ng = nvidiaGpus();
-  const vg = parseVulkanDevices();
+  const vg = getVulkanNvidiaDevices();
 
-  return ng.map(n => {
+  return ng.map((n, i) => {
     const pci = parseBusId(n.busId);
-    const match = vg.find(v => samePci(pci, v.pci));
+    const match = vg[i] || null;
     return {
       ...n,
       pci,
       vulkanIndex: match ? match.vulkanIndex : null,
       vulkanName: match ? match.name : null,
-      vulkanUuid: match ? match.uuid : null
+      vulkanUuid: match ? match.uuid : null,
+      mappingMethod: match ? 'vulkan-nvidia-order' : null
     };
   });
 }
@@ -152,5 +150,6 @@ module.exports = {
   parseVulkanDevices,
   getGpuMap,
   resolveGpuSelection,
-  selectedVulkanDevices
+  selectedVulkanDevices,
+  getVulkanNvidiaDevices
 };
