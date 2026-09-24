@@ -69,6 +69,7 @@ $SUDO rm -rf "$PREFIX"
 $SUDO meson install -C "$WORKDIR/build"
 
 LAYER_MANIFEST="$PREFIX/share/vulkan/implicit_layer.d/vkdevicechooser.json"
+LAYER_LIB_MULTIARCH="$PREFIX/lib/x86_64-linux-gnu/libvkdevicechooser.so"
 LAYER_LIB="$PREFIX/lib/libvkdevicechooser.so"
 
 if [[ ! -f "$LAYER_MANIFEST" ]]; then
@@ -78,15 +79,28 @@ if [[ ! -f "$LAYER_MANIFEST" ]]; then
   exit 1
 fi
 
+# Meson installs the shared library under the Debian/Ubuntu multiarch lib
+# directory. vkdevicechooser's manifest intentionally names the library by
+# basename, so expose that library through the prefix's normal lib directory
+# and the dynamic linker path.
+if [[ ! -f "$LAYER_LIB" && -f "$LAYER_LIB_MULTIARCH" ]]; then
+  $SUDO ln -sfn "$LAYER_LIB_MULTIARCH" "$LAYER_LIB"
+fi
+
 if [[ ! -f "$LAYER_LIB" ]]; then
   echo "ERROR: vkdevicechooser library not found:"
-  echo "  $LAYER_LIB"
-  find "$PREFIX" -maxdepth 5 -type f | sort || true
+  find "$PREFIX" -maxdepth 5 -type f -name 'libvkdevicechooser.so' -print || true
   exit 1
 fi
 
 $SUDO mkdir -p /etc/vulkan/implicit_layer.d
 $SUDO cp "$LAYER_MANIFEST" /etc/vulkan/implicit_layer.d/vkdevicechooser.json
+
+$SUDO tee /etc/ld.so.conf.d/unicred-vkdevicechooser.conf >/dev/null <<EOF
+$PREFIX/lib
+$PREFIX/lib/x86_64-linux-gnu
+EOF
+$SUDO ldconfig
 
 cat <<EOF | $SUDO tee /etc/profile.d/unicred-multi-gpu.sh >/dev/null
 export UNICRED_VKDEVICECHOOSER=1
