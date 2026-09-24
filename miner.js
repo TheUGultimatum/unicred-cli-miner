@@ -114,37 +114,61 @@ function providerScript() {
   return "(()=>{const listeners=new Map();const rpc=(m,p)=>window.__unicred_rpc(m,p||[]);window.ethereum={isMetaMask:true,isRabby:true,isUniCredCLI:true,request({method,params}){return rpc(method,params||[])},sendAsync(payload,callback){const a=Array.isArray(payload)?payload:[payload];Promise.all(a.map(x=>rpc(x.method,x.params||[]))).then(results=>{const r=Array.isArray(payload)?results.map((result,i)=>({jsonrpc:'2.0',id:a[i].id,result})):({jsonrpc:'2.0',id:a[0].id,result:results[0]});callback(null,r)}).catch(callback)},send(payload){if(typeof payload==='string')return rpc(payload,[]);if(Array.isArray(payload))return Promise.all(payload.map(x=>rpc(x.method,x.params||[])));return rpc(payload.method,payload.params||[])},on(event,fn){if(!listeners.has(event))listeners.set(event,[]);listeners.get(event).push(fn);return this},removeListener(event,fn){listeners.set(event,(listeners.get(event)||[]).filter(x=>x!==fn));return this}};window.dispatchEvent(new Event('ethereum#initialized'));})();";
 }
 
-function cleanMetric(text, label, patterns) {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  for (const pattern of patterns) {
-    const m = compact.match(pattern);
-    if (m) return m[1].trim();
-  }
-  const idx = compact.toUpperCase().indexOf(label.toUpperCase());
-  if (idx >= 0) {
-    const tail = compact.slice(idx + label.length).trim();
-    if (tail && !/^(STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\b/i.test(tail)) {
-      return tail.split(/\b(?:STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\b/i)[0].trim();
+function parseHashrateValue(text) {
+  const m = text.match(/(?:HASHRATE|RATE)\s*[:|]?\s*(\d+(?:\.\d+)?)\s*(GH\/s|MH\/s|KH\/s|H\/s)/i);
+  return m ? m[1] + ' ' + m[2] : 'n/a';
+}
+
+function parseLabeledValue(text, label) {
+  const lines = text.split(/\n/).map(s => s.trim()).filter(Boolean);
+  const i = lines.findIndex(line => new RegExp('^' + label + '\\b', 'i').test(line));
+  if (i >= 0) {
+    const line = lines[i].replace(new RegExp('^' + label + '\\s*[:|]?\\s*', 'i'), '').trim();
+    if (line && !/^(?:HASHRATE|EXPECTED|STREAK|DIFFICULTY|CPU|GPU|LIVE RACE)\b/i.test(line)) {
+      return line;
+    }
+    if (lines[i + 1] && !/^(?:HASHRATE|EXPECTED|STREAK|DIFFICULTY|CPU|GPU|LIVE RACE)\b/i.test(lines[i + 1])) {
+      return lines[i + 1];
     }
   }
   return 'n/a';
 }
 
-function extractStats(text) {
+async function readMetricFromDom(page, label) {
+  try {
+    return await page.evaluate((label) => {
+      const all = Array.from(document.querySelectorAll('body *'));
+      const exact = all.filter(el => (el.textContent || '').trim() === label);
+      for (const el of exact) {
+        let p = el.parentElement;
+        for (let depth = 0; p && depth < 4; depth++, p = p.parentElement) {
+          const text = (p.innerText || '').replace(/\\n+/g, ' ').replace(/\\s+/g, ' ').trim();
+          if (text && text.length < 160 && text.includes(label)) {
+            const rest = text.replace(new RegExp('^' + label + '\\s*[:|]?\\s*', 'i'), '').trim();
+            if (rest && rest !== label) return rest;
+          }
+        }
+      }
+      return null;
+    }, label);
+  } catch {
+    return null;
+  }
+}
+
+async function extractStats(page, text) {
+  const hashDom = await readMetricFromDom(page, 'HASHRATE');
+  const expectedDom = await readMetricFromDom(page, 'EXPECTED');
+  const streakDom = await readMetricFromDom(page, 'STREAK');
+  const difficultyDom = await readMetricFromDom(page, 'DIFFICULTY');
+
   return {
-    hashrate: cleanMetric(text, 'HASHRATE', [
-      /HASHRATE\s*[:|]?\s*(\d+(?:\.\d+)?)\s*(GH\/s|MH\/s|KH\/s|H\/s)/i
-    ]),
-    expected: cleanMetric(text, 'EXPECTED', [
-      /EXPECTED\s*[:|]?\s*([^|\n]+?)(?=\s+(?:STREAK|CPU|GPU|LIVE RACE|$))/i,
-      /EXPECTED\s*[:|]?\s*(~?\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds|min|mins|minutes|h|hr|hours))/i
-    ]),
-    streak: cleanMetric(text, 'STREAK', [
-      /STREAK\s*[:|]?\s*([^|\n]+?)(?=\s+(?:CPU|GPU|LIVE RACE|$))/i
-    ]),
-    difficulty: cleanMetric(text, 'DIFFICULTY', [
-      /DIFFICULTY\s*[:|]?\s*([^|\n]+?)(?=\s+(?:PRESS START|CPU|GPU|LIVE RACE|$))/i
-    ])
+    hashrate: (hashDom && /(?:GH\/s|MH\/s|KH\/s|H\/s)/i.test(hashDom))
+      ? hashDom
+      : parseHashrateValue(text),
+    expected: expectedDom || parseLabeledValue(text, 'EXPECTED'),
+    streak: streakDom || parseLabeledValue(text, 'STREAK'),
+    difficulty: difficultyDom || parseLabeledValue(text, 'DIFFICULTY')
   };
 }
 
@@ -435,7 +459,7 @@ async function main() {
     try {
       const body = await page.locator('body').innerText().catch(()=>'');
       const lines = body.split(/\n/).map(s=>s.trim()).filter(Boolean);
-      const metrics = extractStats(body);
+      const metrics = await extractStats(page, body);
       const uptime = Math.floor((Date.now()-startedAt)/1000);
       const hh = String(Math.floor(uptime/3600)).padStart(2,'0');
       const mm = String(Math.floor((uptime%3600)/60)).padStart(2,'0');
@@ -447,7 +471,15 @@ async function main() {
       console.log('[STATS] streak    ' + metrics.streak);
       console.log('[STATS] difficulty ' + metrics.difficulty);
       console.log('[STATS] WebGPU ' + (webgpu.adapter.description || webgpu.adapter.vendor || 'NVIDIA'));
-      printGpuStats();
+      const gpuRowsNow = printGpuStats();
+      if (gpuRowsNow.length === 1) {
+        const g = gpuRowsNow[0];
+        const util = Number(g.util);
+        const power = Number(g.power);
+        if (uptime >= 20 && (util < 20 || power < 100)) {
+          console.log('[WARN] GPU load is low for a 5090: util=' + util + '% power=' + power + 'W. Check the actual mining mode/workload.');
+        }
+      }
 
       const statusLines = lines.filter(x =>
         /(?:found|won|mint|transaction|tx|error|race|streak|expected|difficulty)/i.test(x) &&
