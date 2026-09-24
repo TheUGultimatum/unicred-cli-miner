@@ -202,7 +202,10 @@ async function runMultiGpuSupervisor() {
       // Mesa's DRI_PRIME form can expose only the selected PCI device to a Vulkan client.
       // If unavailable on this host, the child will print its adapter and we stop rather than
       // pretending both GPUs are independently selected.
-      DRI_PRIME: g.pci ? ('pci-' + g.pci.replace(/^0000:/, '').replace(/:/g, '_').replace(/\./g, '_') + '!') : (g.index),
+      DRI_PRIME: (() => {
+        const m = String(g.pci || '').match(/([0-9a-fA-F]{4}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$/);
+        return m ? ('pci-' + m[1] + '_' + m[2] + '_' + m[3] + '_' + m[4] + '!') : String(g.index);
+      })(),
       __UNICRED_GPU_INDEX: String(g.index)
     };
 
