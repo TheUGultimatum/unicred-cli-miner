@@ -20,8 +20,8 @@ echo "== Unicred Multi-GPU experimental setup =="
 $SUDO apt-get update
 $SUDO apt-get install -y \
   git g++ make meson ninja-build pkg-config jq \
-  vulkan-tools vulkan-headers libvulkan-dev \
-  vulkan-validationlayers vulkan-validationlayers-dev
+  vulkan-tools libvulkan-dev \
+  vulkan-validationlayers vulkan-utility-libraries-dev
 
 mkdir -p "$WORKDIR"
 
