@@ -76,3 +76,32 @@ For now, start one miner and confirm which GPU receives the workload. A second i
 ## Security
 
 Use a dedicated wallet for an unattended cloud miner. Keep the private key in the VPS environment or a protected local file. Never commit it to GitHub.
+
+## Dual-GPU mode
+
+The supervisor can launch one isolated Chromium/WebGPU worker per detected GPU:
+
+```bash
+node miner.js --multi --workers 2 --dry-run
+```
+
+Each worker is assigned its GPU PCI address through `DRI_PRIME`. The supervisor prints the GPU mapping.
+
+Because Chromium/WebGPU normally selects one adapter per browser, the supervisor is deliberately separate-process based. Verify that GPU0 and GPU1 both receive load before enabling automatic minting.
+
+## Automatic mint signing
+
+The miner can locally sign the mint transaction with the supplied wallet key:
+
+```bash
+export UNICRED_PRIVATE_KEY='0xYOUR_KEY'
+node miner.js --multi --workers 2 --submit --usage 100
+```
+
+Before sending a mint transaction, the signer checks the wallet balance and estimates the value + gas cost. It also supports EIP-712 typed-data signing when the site requests it.
+
+The key is only consumed locally by the miner process. Never commit it to GitHub, paste it into chat, or include it in logs/screenshots.
+
+## About "100% GPU"
+
+The goal is maximum valid Unicred proof-of-work throughput, not an arbitrary 100% `nvidia-smi` utilization number. Chromium/WebGPU workload size, the site's miner implementation, driver scheduling, and the current race all affect utilization. The CLI refuses software rendering and reports actual GPU power, temperature, utilization, VRAM, and page-reported hashrate so you can measure the real result.
