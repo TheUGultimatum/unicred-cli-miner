@@ -246,12 +246,9 @@ async function main() {
     '--force_high_performance_gpu',
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan,UseSkiaRenderer',
-    '--use-gl=angle',
+    '--enable-features=Vulkan,UseOzonePlatform',
     '--use-angle=vulkan',
-    '--disable-vulkan-surface',
-    '--disable-features=UseSkiaRenderer',
-    ...(HEADLESS ? [] : ['--ozone-platform=x11']),
+    '--ozone-platform=x11',
     '--window-size=1440,900'
   ];
 
