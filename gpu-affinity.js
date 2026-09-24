@@ -12,11 +12,21 @@ function execOutput(command, args, env = process.env) {
   return r.status === 0 ? r.stdout.trim() : '';
 }
 
-function nvidiaGpus() {
+function cleanVulkanEnv(env = process.env) {
+  const clean = {...env};
+  delete clean.ENABLE_DEVICE_CHOOSER_LAYER;
+  delete clean.VULKAN_DEVICE_INDEX;
+  delete clean.DISABLE_DEVICE_CHOOSER_LAYER;
+  delete clean.VK_ADD_LAYER_PATH;
+  delete clean.UNICRED_VKDEVICECHOOSER;
+  return clean;
+}
+
+function nvidiaGpus(env = process.env) {
   const out = execOutput('nvidia-smi', [
     '--query-gpu=index,name,pci.bus_id,uuid',
     '--format=csv,noheader'
-  ]);
+  ], env);
   if (!out) return [];
 
   return out.split(/\r?\n/).filter(Boolean).map(line => {
@@ -36,8 +46,8 @@ function parseBusId(busId) {
   };
 }
 
-function parseVulkanDevices() {
-  const out = execOutput('vulkaninfo', ['--summary']);
+function parseVulkanDevices(env = process.env) {
+  const out = execOutput('vulkaninfo', ['--summary'], env);
   if (!out) return [];
 
   const devices = [];
@@ -67,8 +77,8 @@ function parseVulkanDevices() {
   return devices.filter(d => d.name);
 }
 
-function getVulkanNvidiaDevices() {
-  return parseVulkanDevices()
+function getVulkanNvidiaDevices(env = process.env) {
+  return parseVulkanDevices(env)
     .filter(d => /^0x10de$/i.test(String(d.vendorId || '')))
     .sort((a, b) => a.vulkanIndex - b.vulkanIndex);
 }
@@ -80,9 +90,10 @@ function samePci(a, b) {
     Number(a.func) === Number(b.func);
 }
 
-function getGpuMap() {
-  const ng = nvidiaGpus();
-  const vg = getVulkanNvidiaDevices();
+function getGpuMap(env = process.env) {
+  const cleanEnv = cleanVulkanEnv(env);
+  const ng = nvidiaGpus(cleanEnv);
+  const vg = getVulkanNvidiaDevices(cleanEnv);
 
   return ng.map((n, i) => {
     const pci = parseBusId(n.busId);
@@ -99,7 +110,7 @@ function getGpuMap() {
 }
 
 function resolveGpuSelection(nvidiaIndex) {
-  const map = getGpuMap();
+  const map = getGpuMap(process.env);
   const entry = map.find(g => g.index === Number(nvidiaIndex));
   if (!entry) {
     throw new Error('NVIDIA GPU index not found: ' + nvidiaIndex);
