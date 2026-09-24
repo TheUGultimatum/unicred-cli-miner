@@ -230,11 +230,11 @@ async function selectGpuMode(page) {
 
 
 function webGpuInstrumentationScript() {
-  return String.raw\`(()=> {
-    const workerIndex = \${WORKER_INDEX};
-    const workerCount = \${WORKER_COUNT};
-    const partitioned = \${PARTITIONED};
-    const inspectKernel = \${INSPECT_KERNEL};
+  return String.raw`(()=> {
+    const workerIndex = ${WORKER_INDEX};
+    const workerCount = ${WORKER_COUNT};
+    const partitioned = ${PARTITIONED};
+    const inspectKernel = ${INSPECT_KERNEL};
 
     window.__UNICRED_DEBUG = {
       startedAt: Date.now(),
