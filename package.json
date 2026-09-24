@@ -7,7 +7,10 @@
   "type": "commonjs",
   "scripts": {
     "start": "node miner.js",
-    "check": "node --check miner.js"
+    "check": "node --check miner.js",
+    "multi-gpu": "node multi-gpu.js",
+    "gpu-map": "node multi-gpu.js --map",
+    "gpu-probe": "node multi-gpu.js --probe"
   },
   "dependencies": {
     "ethers": "^6.15.0",
