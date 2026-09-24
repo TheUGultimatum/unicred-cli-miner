@@ -117,7 +117,9 @@ function resolveGpuSelection(nvidiaIndex) {
     env: {
       ENABLE_DEVICE_CHOOSER_LAYER: '1',
       VULKAN_DEVICE_INDEX: String(entry.vulkanIndex),
-      CUDA_VISIBLE_DEVICES: String(entry.index)
+      CUDA_VISIBLE_DEVICES: String(entry.index),
+      VK_ADD_LAYER_PATH: '/opt/unicred-vkdevicechooser/share/vulkan/implicit_layer.d',
+      LD_LIBRARY_PATH: '/opt/unicred-vkdevicechooser/lib/x86_64-linux-gnu:/opt/unicred-vkdevicechooser/lib:' + (process.env.LD_LIBRARY_PATH || '')
     }
   };
 }
