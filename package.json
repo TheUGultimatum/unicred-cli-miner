@@ -1,0 +1,16 @@
+{
+  "name": "unicred-cli-miner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ubuntu CLI wrapper for the Unicred.fun browser proof-of-work miner.",
+  "main": "miner.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node miner.js",
+    "check": "node --check miner.js"
+  },
+  "dependencies": {
+    "ethers": "^6.15.0",
+    "playwright-core": "^1.55.0"
+  }
+}
