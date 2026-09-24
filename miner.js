@@ -20,6 +20,7 @@ const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
 const HEADLESS = !has('--headed');
 const STRICT_GPU = !has('--allow-software') && process.env.UNICRED_ALLOW_SOFTWARE !== '1';
+const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
 const STATS_MS = Math.max(1000, Number(arg('--stats-interval', process.env.UNICRED_STATS_INTERVAL || '5000')));
 
@@ -80,6 +81,52 @@ function providerScript() {
 function extractHashrate(text) {
   const m = text.match(/(\d+(?:\.\d+)?)\s*(GH\/s|MH\/s|KH\/s|H\/s)/i);
   return m ? m[1] + ' ' + m[2] : 'n/a';
+}
+
+
+async function selectGpuMode(page) {
+  if (!FORCE_GPU_MODE) return;
+
+  const controls = await page.locator('button').evaluateAll(buttons =>
+    buttons.map(el => ({
+      text: (el.innerText || '').trim(),
+      ariaPressed: el.getAttribute('aria-pressed'),
+      disabled: el.disabled,
+      visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+    })).filter(x => /^(CPU|GPU)$/i.test(x.text))
+  );
+  console.log('[MODE] CPU/GPU controls:', JSON.stringify(controls));
+
+  const gpuButtons = page.locator('button').filter({hasText: /^GPU$/i});
+  const count = await gpuButtons.count();
+  if (!count) die('GPU mode button not found on unicred.fun.');
+
+  let clicked = false;
+  for (let i = 0; i < count; i++) {
+    const btn = gpuButtons.nth(i);
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.scrollIntoViewIfNeeded().catch(() => {});
+      await btn.click({force:true}).catch(async () => {
+        await btn.evaluate(el => el.click());
+      });
+      clicked = true;
+      break;
+    }
+  }
+
+  if (!clicked) die('GPU mode button exists but is not visible.');
+
+  await page.waitForTimeout(1000);
+
+  const after = await page.locator('button').evaluateAll(buttons =>
+    buttons.map(el => ({
+      text: (el.innerText || '').trim(),
+      ariaPressed: el.getAttribute('aria-pressed'),
+      disabled: el.disabled,
+      visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+    })).filter(x => /^(CPU|GPU)$/i.test(x.text))
+  );
+  console.log('[MODE] After GPU click:', JSON.stringify(after));
 }
 
 async function main() {
@@ -272,8 +319,7 @@ async function main() {
   if (await connect.isVisible().catch(()=>false)) await connect.click().catch(()=>{});
   await page.waitForTimeout(1500);
 
-  const gpuButton = page.getByRole('button', {name:/^GPU$/i}).first();
-  if (await gpuButton.isVisible().catch(()=>false)) await gpuButton.click().catch(()=>{});
+  if (FORCE_GPU_MODE) await selectGpuMode(page);
 
   const range = page.locator('input[type="range"]').first();
   if (await range.count()) await range.fill(String(USAGE)).catch(()=>{});
@@ -284,6 +330,13 @@ async function main() {
   }
 
   await start.click();
+  await page.waitForTimeout(2500);
+
+  const startupBody = await page.locator('body').innerText().catch(() => '');
+  if (FORCE_GPU_MODE && /Rig started on the CPU/i.test(startupBody)) {
+    die('Unicred started CPU mining despite GPU selection. Refusing to waste the rented GPU.');
+  }
+
   console.log('Mining started.');
 
   const startedAt = Date.now();
