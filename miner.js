@@ -265,7 +265,7 @@ function webGpuInstrumentationScript() {
                   let changed = false;
 
                   if (partitioned) {
-                    const re = /let\\s+ctr\\s*=\\s*p\\.ctrBase\\s*\\+\\s*gid\\.x\\s*;/;
+                    const re = /let\s+ctr\s*=\s*p\.ctrBase\s*\+\s*gid\.x\s*;/;
                     if (re.test(code)) {
                       code = code.replace(
                         re,
