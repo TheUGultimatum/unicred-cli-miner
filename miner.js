@@ -173,46 +173,49 @@ function extractHashrate(text) {
 async function selectGpuMode(page) {
   if (!FORCE_GPU_MODE) return;
 
-  const controls = await page.locator('button').evaluateAll(buttons =>
-    buttons.map(el => ({
-      text: (el.innerText || '').trim(),
-      ariaPressed: el.getAttribute('aria-pressed'),
-      disabled: el.disabled,
-      visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-    })).filter(x => /^(CPU|GPU)$/i.test(x.text))
-  );
-  console.log('[MODE] CPU/GPU controls:', JSON.stringify(controls));
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const controls = await page.locator('button').evaluateAll(buttons =>
+      buttons.map(el => ({
+        text: (el.innerText || '').trim(),
+        ariaPressed: el.getAttribute('aria-pressed'),
+        disabled: el.disabled,
+        visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+      })).filter(x => /^(CPU|GPU)$/i.test(x.text))
+    );
+    console.log('[MODE] CPU/GPU controls:', JSON.stringify(controls));
 
-  const gpuButtons = page.locator('button').filter({hasText: /^GPU$/i});
-  const count = await gpuButtons.count();
-  if (!count) die('GPU mode button not found on unicred.fun.');
+    const gpuButtons = page.locator('button').filter({hasText: /^GPU$/i});
+    const count = await gpuButtons.count();
+    if (!count) die('GPU mode button not found on unicred.fun.');
 
-  let clicked = false;
-  for (let i = 0; i < count; i++) {
-    const btn = gpuButtons.nth(i);
-    if (await btn.isVisible().catch(() => false)) {
-      await btn.scrollIntoViewIfNeeded().catch(() => {});
-      await btn.click({force:true}).catch(async () => {
-        await btn.evaluate(el => el.click());
-      });
-      clicked = true;
-      break;
+    for (let i = 0; i < count; i++) {
+      const btn = gpuButtons.nth(i);
+      const visible = await btn.isVisible().catch(() => false);
+      const disabled = await btn.isDisabled().catch(() => true);
+      if (visible && !disabled) {
+        await btn.scrollIntoViewIfNeeded().catch(() => {});
+        await btn.click().catch(async () => {
+          await btn.evaluate(el => el.click());
+        });
+        await page.waitForTimeout(1000);
+
+        const after = await page.locator('button').evaluateAll(buttons =>
+          buttons.map(el => ({
+            text: (el.innerText || '').trim(),
+            ariaPressed: el.getAttribute('aria-pressed'),
+            disabled: el.disabled,
+            visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          })).filter(x => /^(CPU|GPU)$/i.test(x.text))
+        );
+        console.log('[MODE] After GPU click:', JSON.stringify(after));
+        return;
+      }
     }
+
+    await page.waitForTimeout(1000);
   }
 
-  if (!clicked) die('GPU mode button exists but is not visible.');
-
-  await page.waitForTimeout(1000);
-
-  const after = await page.locator('button').evaluateAll(buttons =>
-    buttons.map(el => ({
-      text: (el.innerText || '').trim(),
-      ariaPressed: el.getAttribute('aria-pressed'),
-      disabled: el.disabled,
-      visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-    })).filter(x => /^(CPU|GPU)$/i.test(x.text))
-  );
-  console.log('[MODE] After GPU click:', JSON.stringify(after));
+  die('GPU button stayed disabled. The site does not believe hardware WebGPU is ready.');
 }
 
 async function main() {
@@ -273,9 +276,11 @@ async function main() {
     '--force_high_performance_gpu',
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan,UseOzonePlatform',
+    '--use-gl=angle',
     '--use-angle=vulkan',
-    '--ozone-platform=x11',
+    '--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE',
+    '--ozone-platform-hint=x11',
+    '--disable-gpu-driver-bug-workaround',
     '--window-size=1440,900'
   ];
 
@@ -397,6 +402,31 @@ async function main() {
     throw new Error('Unsupported RPC method: ' + method);
   });
 
+  await page.addInitScript({content: `
+    (() => {
+      try {
+        if (!navigator.gpu || !navigator.gpu.requestAdapter) return;
+        const original = navigator.gpu.requestAdapter.bind(navigator.gpu);
+        let cachedPromise = null;
+        const wrapped = function(options) {
+          if (!cachedPromise) {
+            cachedPromise = original(options || {powerPreference: 'high-performance'});
+          }
+          return cachedPromise;
+        };
+        try {
+          Object.defineProperty(navigator.gpu, 'requestAdapter', {
+            configurable: true,
+            writable: true,
+            value: wrapped
+          });
+        } catch {}
+        window.__UNICRED_WGPU_PREWARM = navigator.gpu.requestAdapter({
+          powerPreference: 'high-performance'
+        }).catch(() => null);
+      } catch {}
+    })();
+  `});
   await page.addInitScript({content:providerScript()});
   page.on('console', msg => {
     const text = msg.text();
