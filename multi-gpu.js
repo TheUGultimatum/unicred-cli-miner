@@ -159,6 +159,7 @@ function launchWorker(gpuIndex) {
   if (HEADLESS) args.push('--headless');
   if (DRY_RUN) args.push('--dry-run');
   if (AUTO_SUBMIT) args.push('--submit');
+  if (INSPECT_KERNEL) args.push('--inspect-kernel');
 
   const logDir = path.resolve(process.env.UNICRED_MULTI_GPU_LOG_DIR || '.multi-gpu-logs');
   fs.mkdirSync(logDir, { recursive: true });
