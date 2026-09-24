@@ -227,7 +227,7 @@ async function selectGpuMode(page) {
 
 
 function debugInitScript() {
-  return String.raw\`(()=> {
+  return String.raw`(()=> {
     window.__UNICRED_DEBUG = {
       startedAt: Date.now(),
       shaders: [],
@@ -292,7 +292,7 @@ function debugInitScript() {
 
     installGpuHooks();
     setInterval(installGpuHooks, 250);
-  })();\`;
+  })();`;
 }
 
 async function main() {
