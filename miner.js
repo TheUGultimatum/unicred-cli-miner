@@ -2,7 +2,6 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
-const fs = require('node:fs');
 const { ethers } = require('ethers');
 const { chromium } = require('playwright');
 
@@ -19,7 +18,7 @@ const arg = (x, d = null) => {
 
 const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
-const HEADLESS = has('--headless');
+const HEADLESS = has('--headless') ? true : false;
 const STRICT_GPU = !has('--allow-software') && process.env.UNICRED_ALLOW_SOFTWARE !== '1';
 const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
@@ -35,14 +34,6 @@ function execOutput(command, args) {
   const r = spawnSync(command, args, { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : '';
 }
-
-function findNvidiaIcd() {
-  const out = execOutput('sh', ['-lc',
-    "for f in /usr/share/vulkan/icd.d/*nvidia*.json /etc/vulkan/icd.d/*nvidia*.json; do [ -f \"$f\" ] && echo \"$f\"; done | head -n 1"
-  ]);
-  return out || null;
-}
-
 
 function gpuRows() {
   const out = execOutput('nvidia-smi', [
@@ -84,54 +75,13 @@ function validatePrivateKey(pk) {
   return pk;
 }
 
-function chromeExecutable() {
-  const candidates = [
-    process.env.CHROME_BIN,
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/google-chrome',
-    chromium.executablePath()
-  ].filter(Boolean);
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return chromium.executablePath();
-}
-
-
 function startVirtualDisplay() {
   if (process.env.DISPLAY || !USE_XVFB) return null;
-
-  // Use a clean, known X11 display for WebGPU. A stale Xvfb process can make
-  // Chromium fail to create its WebGPU context even when Vulkan/nvidia-smi work.
-  spawnSync('pkill', ['-f', 'Xvfb :99'], {stdio: 'ignore'});
-
-  const display = ':99';
-  const xvfb = spawn('Xvfb', [
-    display,
-    '-screen', '0', '1440x900x24',
-    '-ac',
-    '+extension', 'GLX',
-    '+render',
-    '-nolisten', 'tcp'
-  ], {
-    stdio: ['ignore', 'ignore', 'pipe'],
+  const xvfb = spawn('Xvfb', [':99', '-screen', '0', '1440x900x24', '-nolisten', 'tcp'], {
+    stdio: 'ignore',
     detached: false
   });
-
-  xvfb.stderr.on('data', data => {
-    const msg = String(data).trim();
-    if (msg) console.log('[Xvfb]', msg);
-  });
-
-  process.env.DISPLAY = display;
-  spawnSync('sh', ['-lc', 'for i in 1 2 3 4 5; do xdpyinfo >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1']);
-
-  if (!execOutput('xdpyinfo', []).includes('dimensions')) {
-    try { xvfb.kill('SIGTERM'); } catch {}
-    delete process.env.DISPLAY;
-    die('Xvfb failed to start a usable X11 display.');
-  }
-
+  process.env.DISPLAY = ':99';
   return xvfb;
 }
 
@@ -173,49 +123,46 @@ function extractHashrate(text) {
 async function selectGpuMode(page) {
   if (!FORCE_GPU_MODE) return;
 
-  for (let attempt = 0; attempt < 12; attempt++) {
-    const controls = await page.locator('button').evaluateAll(buttons =>
-      buttons.map(el => ({
-        text: (el.innerText || '').trim(),
-        ariaPressed: el.getAttribute('aria-pressed'),
-        disabled: el.disabled,
-        visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-      })).filter(x => /^(CPU|GPU)$/i.test(x.text))
-    );
-    console.log('[MODE] CPU/GPU controls:', JSON.stringify(controls));
+  const controls = await page.locator('button').evaluateAll(buttons =>
+    buttons.map(el => ({
+      text: (el.innerText || '').trim(),
+      ariaPressed: el.getAttribute('aria-pressed'),
+      disabled: el.disabled,
+      visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+    })).filter(x => /^(CPU|GPU)$/i.test(x.text))
+  );
+  console.log('[MODE] CPU/GPU controls:', JSON.stringify(controls));
 
-    const gpuButtons = page.locator('button').filter({hasText: /^GPU$/i});
-    const count = await gpuButtons.count();
-    if (!count) die('GPU mode button not found on unicred.fun.');
+  const gpuButtons = page.locator('button').filter({hasText: /^GPU$/i});
+  const count = await gpuButtons.count();
+  if (!count) die('GPU mode button not found on unicred.fun.');
 
-    for (let i = 0; i < count; i++) {
-      const btn = gpuButtons.nth(i);
-      const visible = await btn.isVisible().catch(() => false);
-      const disabled = await btn.isDisabled().catch(() => true);
-      if (visible && !disabled) {
-        await btn.scrollIntoViewIfNeeded().catch(() => {});
-        await btn.click().catch(async () => {
-          await btn.evaluate(el => el.click());
-        });
-        await page.waitForTimeout(1000);
-
-        const after = await page.locator('button').evaluateAll(buttons =>
-          buttons.map(el => ({
-            text: (el.innerText || '').trim(),
-            ariaPressed: el.getAttribute('aria-pressed'),
-            disabled: el.disabled,
-            visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-          })).filter(x => /^(CPU|GPU)$/i.test(x.text))
-        );
-        console.log('[MODE] After GPU click:', JSON.stringify(after));
-        return;
-      }
+  let clicked = false;
+  for (let i = 0; i < count; i++) {
+    const btn = gpuButtons.nth(i);
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.scrollIntoViewIfNeeded().catch(() => {});
+      await btn.click({force:true}).catch(async () => {
+        await btn.evaluate(el => el.click());
+      });
+      clicked = true;
+      break;
     }
-
-    await page.waitForTimeout(1000);
   }
 
-  die('GPU button stayed disabled. The site does not believe hardware WebGPU is ready.');
+  if (!clicked) die('GPU mode button exists but is not visible.');
+
+  await page.waitForTimeout(1000);
+
+  const after = await page.locator('button').evaluateAll(buttons =>
+    buttons.map(el => ({
+      text: (el.innerText || '').trim(),
+      ariaPressed: el.getAttribute('aria-pressed'),
+      disabled: el.disabled,
+      visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+    })).filter(x => /^(CPU|GPU)$/i.test(x.text))
+  );
+  console.log('[MODE] After GPU click:', JSON.stringify(after));
 }
 
 async function main() {
@@ -252,41 +199,26 @@ async function main() {
   console.log('Wallet: ' + wallet.address);
 
   const xvfb = !HEADLESS ? startVirtualDisplay() : null;
-  console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless-new' : 'X11/virtual-display');
-
-  const nvidiaIcd = findNvidiaIcd();
-  if (nvidiaIcd) {
-    console.log('NVIDIA Vulkan ICD:', nvidiaIcd);
-    process.env.VK_ICD_FILENAMES = nvidiaIcd;
-    process.env.VK_DRIVER_FILES = nvidiaIcd;
-    process.env.__GLX_VENDOR_LIBRARY_NAME = 'nvidia';
-    process.env.NVIDIA_DRIVER_CAPABILITIES = process.env.NVIDIA_DRIVER_CAPABILITIES || 'all';
-  } else {
-    console.log('NVIDIA Vulkan ICD: not found in standard locations');
-  }
+  console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display');
 
   const chromiumArgs = [
     '--no-sandbox',
     '--disable-dev-shm-usage',
-    '--no-first-run',
-    '--no-default-browser-check',
     '--enable-gpu',
     '--ignore-gpu-blocklist',
     '--disable-software-rasterizer',
     '--force_high_performance_gpu',
     '--use-webgpu-power-preference=high-performance',
     '--enable-unsafe-webgpu',
-    '--use-gl=angle',
+    '--enable-features=Vulkan,UseOzonePlatform',
     '--use-angle=vulkan',
-    '--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE',
-    '--ozone-platform-hint=x11',
-    '--disable-gpu-driver-bug-workaround',
+    ...(HEADLESS ? [] : ['--ozone-platform=x11']),
     '--window-size=1440,900'
   ];
 
   const context = await chromium.launchPersistentContext('', {
     headless: HEADLESS,
-    executablePath: chromeExecutable(),
+    executablePath: chromium.executablePath(),
     viewport: {width:1440, height:900},
     args: chromiumArgs,
     env: {...process.env, ...(process.env.DISPLAY ? {DISPLAY: process.env.DISPLAY} : {})}
@@ -402,31 +334,6 @@ async function main() {
     throw new Error('Unsupported RPC method: ' + method);
   });
 
-  await page.addInitScript({content: `
-    (() => {
-      try {
-        if (!navigator.gpu || !navigator.gpu.requestAdapter) return;
-        const original = navigator.gpu.requestAdapter.bind(navigator.gpu);
-        let cachedPromise = null;
-        const wrapped = function(options) {
-          if (!cachedPromise) {
-            cachedPromise = original(options || {powerPreference: 'high-performance'});
-          }
-          return cachedPromise;
-        };
-        try {
-          Object.defineProperty(navigator.gpu, 'requestAdapter', {
-            configurable: true,
-            writable: true,
-            value: wrapped
-          });
-        } catch {}
-        window.__UNICRED_WGPU_PREWARM = navigator.gpu.requestAdapter({
-          powerPreference: 'high-performance'
-        }).catch(() => null);
-      } catch {}
-    })();
-  `});
   await page.addInitScript({content:providerScript()});
   page.on('console', msg => {
     const text = msg.text();
