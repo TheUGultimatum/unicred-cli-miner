@@ -6,7 +6,7 @@ WORKDIR="${ROOT}/.multi-gpu-tools"
 PREFIX="/opt/unicred-vkdevicechooser"
 REPO="https://github.com/aejsmith/vkdevicechooser.git"
 REF="1.0"
-VULKAN_LOADER_REF="vulkan-sdk-1.4.321.0"
+VULKAN_LOADER_REF="v1.3.275"
 VULKAN_LAYER_HEADER="$WORKDIR/include/vulkan/vk_layer_dispatch_table.h"
 
 if [[ $EUID -eq 0 ]]; then
