@@ -114,9 +114,38 @@ function providerScript() {
   return "(()=>{const listeners=new Map();const rpc=(m,p)=>window.__unicred_rpc(m,p||[]);window.ethereum={isMetaMask:true,isRabby:true,isUniCredCLI:true,request({method,params}){return rpc(method,params||[])},sendAsync(payload,callback){const a=Array.isArray(payload)?payload:[payload];Promise.all(a.map(x=>rpc(x.method,x.params||[]))).then(results=>{const r=Array.isArray(payload)?results.map((result,i)=>({jsonrpc:'2.0',id:a[i].id,result})):({jsonrpc:'2.0',id:a[0].id,result:results[0]});callback(null,r)}).catch(callback)},send(payload){if(typeof payload==='string')return rpc(payload,[]);if(Array.isArray(payload))return Promise.all(payload.map(x=>rpc(x.method,x.params||[])));return rpc(payload.method,payload.params||[])},on(event,fn){if(!listeners.has(event))listeners.set(event,[]);listeners.get(event).push(fn);return this},removeListener(event,fn){listeners.set(event,(listeners.get(event)||[]).filter(x=>x!==fn));return this}};window.dispatchEvent(new Event('ethereum#initialized'));})();";
 }
 
-function extractHashrate(text) {
-  const m = text.match(/(\d+(?:\.\d+)?)\s*(GH\/s|MH\/s|KH\/s|H\/s)/i);
-  return m ? m[1] + ' ' + m[2] : 'n/a';
+function cleanMetric(text, label, patterns) {
+  const compact = text.replace(/\\s+/g, ' ').trim();
+  for (const pattern of patterns) {
+    const m = compact.match(pattern);
+    if (m) return m[1].trim();
+  }
+  const idx = compact.toUpperCase().indexOf(label.toUpperCase());
+  if (idx >= 0) {
+    const tail = compact.slice(idx + label.length).trim();
+    if (tail && !/^(STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\\b/i.test(tail)) {
+      return tail.split(/\\b(?:STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\\b/i)[0].trim();
+    }
+  }
+  return 'n/a';
+}
+
+function extractStats(text) {
+  return {
+    hashrate: cleanMetric(text, 'HASHRATE', [
+      /HASHRATE\\s*[:|]?\\s*(\\d+(?:\\.\\d+)?)\\s*(GH\\/s|MH\\/s|KH\\/s|H\\/s)/i
+    ].map(r => new RegExp(r.source, 'i'))),
+    expected: cleanMetric(text, 'EXPECTED', [
+      /EXPECTED\\s*[:|]?\\s*([^|\\n]+?)(?=\\s+(?:STREAK|CPU|GPU|LIVE RACE|$))/i,
+      /EXPECTED\\s*[:|]?\\s*(~?\\d+(?:\\.\\d+)?\\s*(?:ms|s|sec|secs|seconds|min|mins|minutes|h|hr|hours))/i
+    ]),
+    streak: cleanMetric(text, 'STREAK', [
+      /STREAK\\s*[:|]?\\s*([^|\\n]+?)(?=\\s+(?:CPU|GPU|LIVE RACE|$))/i
+    ]),
+    difficulty: cleanMetric(text, 'DIFFICULTY', [
+      /DIFFICULTY\\s*[:|]?\\s*([^|\\n]+?)(?=\\s+(?:PRESS START|CPU|GPU|LIVE RACE|$))/i
+    ])
+  };
 }
 
 
@@ -407,21 +436,26 @@ async function main() {
     try {
       const body = await page.locator('body').innerText().catch(()=>'');
       const lines = body.split(/\n/).map(s=>s.trim()).filter(Boolean);
-      const hash = extractHashrate(body);
+      const metrics = extractStats(body);
       const uptime = Math.floor((Date.now()-startedAt)/1000);
       const hh = String(Math.floor(uptime/3600)).padStart(2,'0');
       const mm = String(Math.floor((uptime%3600)/60)).padStart(2,'0');
       const ss = String(uptime%60).padStart(2,'0');
 
-      console.log('\n[STATS] uptime ' + hh + ':' + mm + ':' + ss + ' | page hashrate ' + hash);
+      console.log('\n[STATS] uptime ' + hh + ':' + mm + ':' + ss);
+      console.log('[STATS] hashrate  ' + metrics.hashrate);
+      console.log('[STATS] expected  ' + metrics.expected);
+      console.log('[STATS] streak    ' + metrics.streak);
+      console.log('[STATS] difficulty ' + metrics.difficulty);
       console.log('[STATS] WebGPU ' + (webgpu.adapter.description || webgpu.adapter.vendor || 'NVIDIA'));
       printGpuStats();
 
       const statusLines = lines.filter(x =>
-        /HASHRATE|EXPECTED|STREAK|DIFFICULTY|LIVE RACE|WIN|MINT|TX|ERROR|CPU|GPU/i.test(x)
+        /(?:found|won|mint|transaction|tx|error|race|streak|expected|difficulty)/i.test(x) &&
+        x.length < 220
       );
       if (statusLines.length) {
-        console.log('[UNICRED] ' + statusLines.slice(0,12).join(' | '));
+        console.log('[UNICRED] ' + statusLines.slice(0,8).join(' | '));
       }
     } catch (error) {
       console.log('[STATS ERROR] ' + error.message);
