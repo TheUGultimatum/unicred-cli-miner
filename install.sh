@@ -31,7 +31,8 @@ $SUDO apt-get install -y \
   libcups2t64 libdrm2 libgbm1 libgtk-3-0t64 libx11-6 libx11-xcb1 libxcb1 \
   libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
   libxshmfence1 libxss1 libxtst6 libasound2t64 libfontconfig1 libfreetype6 \
-  libexpat1 libvulkan1 vulkan-tools mesa-vulkan-drivers mesa-utils
+  libexpat1 libvulkan1 libvulkan-dev vulkan-tools vulkan-validationlayers-dev \
+  meson ninja-build build-essential mesa-vulkan-drivers mesa-utils
 
 for pkg in libglvnd0 nvidia-vulkan-icd; do
   if apt-cache show "$pkg" >/dev/null 2>&1; then
@@ -79,7 +80,21 @@ echo "[4/6] Installing project dependencies..."
 rm -rf node_modules
 npm install
 
-echo "[5/6] Installing Playwright Chromium + remaining system deps..."
+echo "[5/7] Installing Vulkan device-chooser layer..."
+VKCHOOSER_DIR="/opt/vkdevicechooser"
+if [[ ! -d "$VKCHOOSER_DIR/.git" ]]; then
+  $SUDO rm -rf "$VKCHOOSER_DIR"
+  $SUDO git clone --depth 1 https://github.com/aejsmith/vkdevicechooser.git "$VKCHOOSER_DIR"
+fi
+(
+  cd "$VKCHOOSER_DIR"
+  rm -rf builddir
+  meson setup builddir --prefix=/usr
+  meson compile -C builddir
+  $SUDO meson install -C builddir
+)
+
+echo "[6/7] Installing Playwright Chromium + remaining system deps..."
 npx playwright install chromium
 npx playwright install-deps chromium || true
 
@@ -96,9 +111,17 @@ cat > "$CONFIG_DIR/config.env.example" <<'CFG'
 CFG
 chmod 600 "$CONFIG_DIR/config.env.example"
 
-echo "[6/6] Final GPU/Vulkan checks..."
+echo "[7/7] Final GPU/Vulkan checks..."
 echo "--- NVIDIA ---"
 command -v nvidia-smi && nvidia-smi --query-gpu=name,driver_version,memory.total,utilization.gpu --format=csv,noheader || true
+
+echo "--- Vulkan device chooser ---"
+if command -v vulkaninfo >/dev/null 2>&1; then
+  for i in 0 1; do
+    echo "Vulkan index $i:"
+    ENABLE_DEVICE_CHOOSER_LAYER=1 VULKAN_DEVICE_INDEX="$i" vulkaninfo --summary 2>&1 | grep -E 'deviceName|driverName' | head -n 8 || true
+  done
+fi
 
 echo "--- Vulkan ---"
 command -v vulkaninfo && vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName|apiVersion' | head -n 20 || true
