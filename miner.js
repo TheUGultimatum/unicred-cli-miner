@@ -51,21 +51,6 @@ function gpuRows() {
   });
 }
 
-function gpuInventory() {
-  const out = execOutput('nvidia-smi', [
-    '--query-gpu=index,pci.bus_id,name,driver_version,memory.total,utilization.gpu,temperature.gpu,power.draw',
-    '--format=csv,noheader,nounits'
-  ]);
-  if (!out) return [];
-  return out.split('\n').map(line => {
-    const p = line.split(',').map(s => s.trim());
-    return {
-      index: p[0], pci: p[1], name: p[2], driver: p[3],
-      memTotal: p[4], util: p[5], temp: p[6], power: p[7]
-    };
-  });
-}
-
 function printGpuStats() {
   const rows = gpuRows();
   if (!rows.length) {
@@ -181,11 +166,6 @@ async function selectGpuMode(page) {
 }
 
 async function main() {
-  if (MULTI && WORKER < 0) {
-    await runMultiGpuSupervisor();
-    return;
-  }
-
   console.clear();
   console.log('====================================================');
   console.log('              UNICRED VAST GPU MINER');
