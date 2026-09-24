@@ -5,17 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/unicred-cli-miner
-EnvironmentFile=-%h/.config/unicred-miner/config.env
-ExecStart=/usr/bin/node %h/unicred-cli-miner/miner.js --submit
+WorkingDirectory=/unicred-cli-miner
+EnvironmentFile=-/root/.config/unicred-miner/config.env
+ExecStart=/usr/bin/node /unicred-cli-miner/miner.js --submit
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectHome=read-only
-ReadWritePaths=%h/.config/unicred-miner
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
