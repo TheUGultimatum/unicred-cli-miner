@@ -24,9 +24,6 @@ const FORCE_GPU_MODE = !has('--cpu') && process.env.UNICRED_CPU_MODE !== '1';
 const USAGE = Math.max(1, Math.min(100, Number(arg('--usage', process.env.UNICRED_USAGE || '100'))));
 const STATS_MS = Math.max(1000, Number(arg('--stats-interval', process.env.UNICRED_STATS_INTERVAL || '5000')));
 const USE_XVFB = process.env.UNICRED_XVFB !== '0';
-const MULTI = has('--multi') || process.env.UNICRED_MULTI_GPU === '1';
-const WORKER = Number(arg('--worker', process.env.UNICRED_WORKER_INDEX ?? '-1'));
-const WORKER_COUNT = Math.max(1, Number(arg('--workers', process.env.UNICRED_WORKERS || '1')));
 
 function die(message) {
   console.error('\nERROR:', message);
@@ -183,64 +180,6 @@ async function selectGpuMode(page) {
   console.log('[MODE] After GPU click:', JSON.stringify(after));
 }
 
-async function runMultiGpuSupervisor() {
-  const gpus = gpuInventory();
-  const count = Math.min(WORKER_COUNT, gpus.length);
-  if (count < 2) die('Multi-GPU mode requested but fewer than 2 NVIDIA GPUs were detected.');
-
-  console.log('Checking Vulkan device-chooser layer for each GPU...');
-  for (let i = 0; i < count; i++) {
-    const env = {...process.env, ENABLE_DEVICE_CHOOSER_LAYER:'1', VULKAN_DEVICE_INDEX:String(i)};
-    const probe = spawnSync('vulkaninfo', ['--summary'], {env, encoding:'utf8'});
-    const text = (probe.stdout || '') + '\n' + (probe.stderr || '');
-    const nvidia = /deviceName\s*=\s*NVIDIA GeForce RTX|driverName\s*=\s*NVIDIA/i.test(text);
-    console.log('[VULKAN CHECK] index ' + i + ': ' + (nvidia ? 'NVIDIA OK' : 'NOT NVIDIA / unavailable'));
-    if (!nvidia) die('Vulkan device chooser could not isolate GPU index ' + i + '.');
-  }
-
-  console.log('Starting ' + count + ' isolated WebGPU workers.');
-
-  const { spawn } = require('node:child_process');
-  const children = [];
-
-  for (let i = 0; i < count; i++) {
-    const g = gpus[i];
-    const env = {
-      ...process.env,
-      UNICRED_WORKER_INDEX: String(i),
-      UNICRED_MULTI_GPU: '0',
-      // Mesa's DRI_PRIME form can expose only the selected PCI device to a Vulkan client.
-      // If unavailable on this host, the child will print its adapter and we stop rather than
-      // pretending both GPUs are independently selected.
-      ENABLE_DEVICE_CHOOSER_LAYER: '1',
-      VULKAN_DEVICE_INDEX: String(i),
-      __UNICRED_GPU_INDEX: String(g.index)
-    };
-
-    const childArgs = process.argv.slice(1).filter(x => !['--multi'].includes(x));
-    if (!childArgs.includes('--worker')) childArgs.push('--worker', String(i));
-    const child = spawn(process.execPath, childArgs, { env, stdio: 'inherit' });
-    children.push(child);
-
-    console.log('[SUPERVISOR] GPU' + g.index + ' -> worker ' + i + ' PCI ' + g.pci);
-  }
-
-  const shutdown = () => {
-    for (const child of children) {
-      if (!child.killed) child.kill('SIGINT');
-    }
-  };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-
-  await Promise.all(children.map(child => new Promise(resolve => {
-    child.on('exit', (code, signal) => {
-      console.log('[SUPERVISOR] worker exited:', {code, signal});
-      resolve();
-    });
-  })));
-}
-
 async function main() {
   if (MULTI && WORKER < 0) {
     await runMultiGpuSupervisor();
@@ -253,19 +192,11 @@ async function main() {
   console.log('====================================================');
 
   const gpus = printGpuStats();
-      if (WORKER >= 0) console.log('[WORKER] GPU index ' + (process.env.__UNICRED_GPU_INDEX || '?') + ' stats above');
   if (!gpus.length) die('No NVIDIA GPU detected.');
   console.log('Detected NVIDIA GPUs: ' + gpus.length);
-  console.log('Worker:', WORKER >= 0 ? WORKER : 'single');
-  console.log('Requested GPU index:', process.env.__UNICRED_GPU_INDEX || 'auto');
-  console.log('Device chooser:', process.env.ENABLE_DEVICE_CHOOSER_LAYER || 'unset', 'VULKAN_DEVICE_INDEX=' + (process.env.VULKAN_DEVICE_INDEX || 'unset'));
-
   if (gpus.length > 1) {
-    console.log('NOTE: This browser instance uses one WebGPU adapter.');
-    console.log('Do not launch duplicate miners against the same race until');
-    console.log('Unicred work/nonce partitioning has been verified.');
+    console.log('NOTE: Single-GPU mode enabled. Using the default/high-performance NVIDIA adapter only.');
   }
-
   console.log('Mode: ' + (DRY_RUN ? 'DRY RUN' : AUTO_SUBMIT ? 'AUTO-SUBMIT' : 'FIND ONLY'));
 
   let wallet;
