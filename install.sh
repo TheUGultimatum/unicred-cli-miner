@@ -55,7 +55,19 @@ elif [[ "$NVIDIA_OK" -eq 0 && "$IS_WSL" -eq 1 ]]; then
   echo "WSL/host GPU passthrough detected; host controls the NVIDIA driver. Skipping driver replacement."
 fi
 
-echo "[3/6] Installing Node.js 20+ if needed..."
+echo "[3/7] Installing Google Chrome Stable..."
+ARCH="$(dpkg --print-architecture)"
+if [[ "$ARCH" == "amd64" ]]; then
+  $SUDO mkdir -p /etc/apt/keyrings
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | $SUDO gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" | $SUDO tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
+  $SUDO apt-get update
+  $SUDO apt-get install -y google-chrome-stable
+else
+  echo "Non-amd64 host detected ($ARCH); keeping Playwright Chromium."
+fi
+
+echo "[4/7] Installing Node.js 20+ if needed..."
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
 if [[ "$NODE_MAJOR" -lt 20 ]]; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
@@ -71,11 +83,11 @@ fi
 echo "Node: $(node --version)"
 echo "npm:  $(npm --version)"
 
-echo "[4/6] Installing project dependencies..."
+echo "[5/7] Installing project dependencies..."
 rm -rf node_modules
 npm install
 
-echo "[5/6] Installing Playwright Chromium + remaining system deps..."
+echo "[6/7] Installing Playwright Chromium fallback + remaining system deps..."
 
 npx playwright install chromium
 npx playwright install-deps chromium || true
@@ -93,12 +105,17 @@ cat > "$CONFIG_DIR/config.env.example" <<'CFG'
 CFG
 chmod 600 "$CONFIG_DIR/config.env.example"
 
-echo "[6/6] Final GPU/Vulkan checks..."
+echo "[7/7] Final GPU/Vulkan checks..."
 echo "--- NVIDIA ---"
 command -v nvidia-smi && nvidia-smi --query-gpu=name,driver_version,memory.total,utilization.gpu --format=csv,noheader || true
 
 echo "--- Vulkan ---"
 command -v vulkaninfo && vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName|apiVersion' | head -n 20 || true
+
+echo "--- Google Chrome ---"
+if command -v google-chrome-stable >/dev/null 2>&1; then
+  google-chrome-stable --version || true
+fi
 
 echo "--- Playwright ---"
 node -e "const {chromium}=require('playwright'); console.log(chromium.executablePath())"
