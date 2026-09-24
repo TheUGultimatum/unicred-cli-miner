@@ -188,6 +188,16 @@ async function runMultiGpuSupervisor() {
   const count = Math.min(WORKER_COUNT, gpus.length);
   if (count < 2) die('Multi-GPU mode requested but fewer than 2 NVIDIA GPUs were detected.');
 
+  console.log('Checking Vulkan device-chooser layer for each GPU...');
+  for (let i = 0; i < count; i++) {
+    const env = {...process.env, ENABLE_DEVICE_CHOOSER_LAYER:'1', VULKAN_DEVICE_INDEX:String(i)};
+    const probe = spawnSync('vulkaninfo', ['--summary'], {env, encoding:'utf8'});
+    const text = (probe.stdout || '') + '\n' + (probe.stderr || '');
+    const nvidia = /deviceName\s*=\s*NVIDIA GeForce RTX|driverName\s*=\s*NVIDIA/i.test(text);
+    console.log('[VULKAN CHECK] index ' + i + ': ' + (nvidia ? 'NVIDIA OK' : 'NOT NVIDIA / unavailable'));
+    if (!nvidia) die('Vulkan device chooser could not isolate GPU index ' + i + '.');
+  }
+
   console.log('Starting ' + count + ' isolated WebGPU workers.');
 
   const { spawn } = require('node:child_process');
@@ -202,7 +212,8 @@ async function runMultiGpuSupervisor() {
       // Mesa's DRI_PRIME form can expose only the selected PCI device to a Vulkan client.
       // If unavailable on this host, the child will print its adapter and we stop rather than
       // pretending both GPUs are independently selected.
-      DRI_PRIME: i === 0 ? (process.env.UNICRED_GPU0_DRI_PRIME || '') : (process.env.UNICRED_GPU1_DRI_PRIME || '1!'),
+      ENABLE_DEVICE_CHOOSER_LAYER: '1',
+      VULKAN_DEVICE_INDEX: String(i),
       __UNICRED_GPU_INDEX: String(g.index)
     };
 
@@ -247,9 +258,7 @@ async function main() {
   console.log('Detected NVIDIA GPUs: ' + gpus.length);
   console.log('Worker:', WORKER >= 0 ? WORKER : 'single');
   console.log('Requested GPU index:', process.env.__UNICRED_GPU_INDEX || 'auto');
-  console.log('DRI_PRIME:', process.env.DRI_PRIME || 'unset');
-  if (WORKER === 0 && !process.env.DRI_PRIME) console.log('Worker 0 uses Vulkan default adapter (expected GPU0).');
-  if (WORKER === 1) console.log('Worker 1 uses DRI_PRIME=1! to expose only the second Vulkan GPU.');
+  console.log('Device chooser:', process.env.ENABLE_DEVICE_CHOOSER_LAYER || 'unset', 'VULKAN_DEVICE_INDEX=' + (process.env.VULKAN_DEVICE_INDEX || 'unset'));
 
   if (gpus.length > 1) {
     console.log('NOTE: This browser instance uses one WebGPU adapter.');
