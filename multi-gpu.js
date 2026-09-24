@@ -25,6 +25,7 @@ const HEADLESS = has('--headless');
 const DRY_RUN = has('--dry-run') || process.env.UNICRED_DRY_RUN === '1';
 const AUTO_SUBMIT = has('--submit') || process.env.UNICRED_AUTO_SUBMIT === '1';
 const INSPECT_KERNEL = has('--inspect-kernel');
+const PARTITIONED = has('--partitioned');
 
 function die(message) {
   console.error('\nERROR:', message);
@@ -136,7 +137,7 @@ async function probeGpu(gpuIndex) {
   }
 }
 
-function launchWorker(gpuIndex) {
+function launchWorker(gpuIndex, workerPosition, workerCount) {
   const selection = resolveGpuSelection(gpuIndex);
   const workerId = 'gpu-' + gpuIndex;
 
@@ -146,6 +147,9 @@ function launchWorker(gpuIndex) {
     UNICRED_MULTI_GPU: '1',
     UNICRED_GPU_INDEX: String(gpuIndex),
     UNICRED_WORKER_ID: workerId,
+    UNICRED_WORKER_INDEX: String(workerPosition),
+    UNICRED_WORKER_COUNT: String(workerCount),
+    UNICRED_PARTITIONED: PARTITIONED ? '1' : '0',
     UNICRED_STATS_INTERVAL: String(STATS_MS)
   };
 
@@ -160,6 +164,7 @@ function launchWorker(gpuIndex) {
   if (DRY_RUN) args.push('--dry-run');
   if (AUTO_SUBMIT) args.push('--submit');
   if (INSPECT_KERNEL) args.push('--inspect-kernel');
+  if (PARTITIONED) args.push('--partitioned', '--worker-index', String(workerPosition), '--worker-count', String(workerCount));
 
   const logDir = path.resolve(process.env.UNICRED_MULTI_GPU_LOG_DIR || '.multi-gpu-logs');
   fs.mkdirSync(logDir, { recursive: true });
@@ -198,6 +203,19 @@ function launchWorker(gpuIndex) {
 
       const match = line.match(/\[STATS\]\s+hashrate\s+(.+)/i);
       if (match) state.rate = parseHashrate(match[1]);
+
+      const partitionMatch = line.match(/\[PARTITION\]\s+Params ctrBase=(\d+)/i);
+      if (partitionMatch) {
+        state.firstCtrBase = state.firstCtrBase ?? Number(partitionMatch[1]);
+        state.lastCtrBase = Number(partitionMatch[1]);
+        if (workers.every(w => Number.isFinite(w.firstCtrBase))) {
+          const bases = workers.map(w => w.firstCtrBase);
+          if (new Set(bases).size !== 1) {
+            console.log('\n[COORDINATOR] Different ctrBase values detected across workers. Stopping instead of assuming independent work. bases=' + bases.join(','));
+            stopAll(workers, 'ctrBase mismatch');
+          }
+        }
+      }
 
       if (/TX SENT:/i.test(line)) {
         console.log('\n[COORDINATOR] A worker submitted a transaction.');
@@ -274,10 +292,11 @@ async function main() {
     return;
   }
 
-  if (!ALLOW_UNPARTITIONED) {
+  if (!ALLOW_UNPARTITIONED && !PARTITIONED) {
     die(
-      'Experimental multi-GPU mining is blocked until work partitioning is verified. ' +
-      'Use --allow-unpartitioned only for development testing.'
+      'Multi-GPU mining is blocked until you select a work mode. ' +
+      'Use --partitioned for deterministic counter partitioning, or ' +
+      '--allow-unpartitioned for legacy duplicate-work testing.'
     );
   }
 
@@ -286,15 +305,24 @@ async function main() {
   console.log('====================================================');
   console.log('Workers:', gpuIndices.length);
   console.log('Usage:', USAGE + '%');
-  console.log('Work partitioning: NOT YET VERIFIED');
+  console.log('Work partitioning: ' + (PARTITIONED ? 'DETERMINISTIC CTR STRIDE' : 'NOT VERIFIED'));
   console.log('This mode is for development only.');
+  if (PARTITIONED) {
+    console.log('Formula: ctr = ctrBase + gid.x * ' + gpuIndices.length + ' + workerIndex');
+  }
   console.log('====================================================\n');
 
   if (AUTO_SUBMIT && !process.env.UNICRED_PRIVATE_KEY) {
     die('--submit requires UNICRED_PRIVATE_KEY in the coordinator environment.');
   }
 
-  workers = gpuIndices.map(launchWorker);
+  if (PARTITIONED && gpuIndices.length < 2) {
+    die('Partitioned mode requires at least 2 GPUs.');
+  }
+
+  workers = gpuIndices.map((gpuIndex, workerPosition) =>
+    launchWorker(gpuIndex, workerPosition, gpuIndices.length)
+  );
 
   setInterval(() => {
     const total = workers.reduce((sum, worker) => sum + worker.rate, 0);
