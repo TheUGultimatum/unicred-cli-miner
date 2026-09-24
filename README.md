@@ -1,94 +1,60 @@
-# Unicred CLI Miner
+# Unicred CLI Miner — Multi-GPU Development
 
-Single-GPU Ubuntu/Vast runner for the Unicred.fun browser proof-of-work miner.
+This branch is the experimental **multi-GPU development branch**.
 
-## Goal
-
-This repository intentionally runs **one GPU miner per instance**.
-
-It:
-- detects the NVIDIA GPU
-- installs the required Linux, Vulkan and Chromium dependencies automatically
-- installs Node.js 20+
-- installs Playwright Chromium
-- launches Chromium with hardware-GPU/high-performance WebGPU flags
-- refuses software rendering such as SwiftShader/llvmpipe
-- selects the Unicred GPU mining mode
-- prints live hashrate and GPU telemetry
-- supports optional local wallet signing/submission after the dry run passes
-
-## Vast.ai
-
-Use a native Linux NVIDIA GPU instance. A CUDA base image is fine.
-
-Connect through Vast's SSH or terminal/Jupyter interface. Tunnels are not required.
-
-For a single RTX 5090 instance:
-
-```bash
-git clone https://github.com/TheUGultimatum/unicred-cli-miner.git
-cd unicred-cli-miner
-chmod +x install.sh
-./install.sh
-```
-
-The installer handles Node.js, Playwright Chromium, Vulkan/Chromium runtime libraries, Xvfb and NVIDIA checks.
-
-## Mandatory first step: dry run
-
-Run:
-
-```bash
-node miner.js --dry-run
-```
-
-The dry run uses a temporary wallet and does not sign or submit transactions.
-
-It should report an NVIDIA WebGPU adapter and then start Unicred GPU mining.
-
-The miner exits if it detects CPU-only mining or software rendering.
-
-## Live stats
-
-The CLI reports:
-- page-reported Unicred hashrate
-- WebGPU adapter
-- GPU utilization
-- GPU temperature
-- power draw
-- VRAM usage
-- driver version
-- Unicred status/difficulty/race text
-- uptime
-
-The objective is maximum valid Unicred PoW throughput. A fixed 95-99% `nvidia-smi` utilization cannot be guaranteed because browser workload, WebGPU dispatch, driver scheduling and the live race determine actual utilization.
-
-## Real mining and automatic minting
-
-Only after a successful dry run:
-
-```bash
-export UNICRED_PRIVATE_KEY='0xYOUR_PRIVATE_KEY'
-node miner.js --submit --usage 100
-```
-
-The private key is used locally. The miner can:
-- check the wallet balance
-- estimate the transaction's mint value + gas cost
-- sign locally
-- submit the transaction
-- wait for confirmation
-- handle EIP-712 signing if the site requests it
-
-It does **not** send the private key to Unicred or store it in the repository.
-
-Never put the private key in GitHub, chat, screenshots, shell scripts or Docker images.
-
-Use a dedicated wallet for unattended cloud mining.
-
-## Stopping
+The stable single-GPU implementation is maintained separately on:
 
 ```text
-Ctrl+C
+single-gpu-stable
 ```
 
+Full multi-GPU development documentation:
+
+[README-MULTI-GPU.md](./README-MULTI-GPU.md)
+
+## Status
+
+```text
+GPU discovery             ✅
+NVIDIA → Vulkan mapping   ✅
+Vulkan device chooser     ✅
+Per-GPU worker launcher   ✅
+Aggregate stats           ✅
+Kernel inspection         ✅
+Work partitioning         ❌ NOT VERIFIED
+Production multi-GPU      ❌ NOT READY
+```
+
+## First commands
+
+```bash
+cd /workspace/unicred-cli-miner
+
+git fetch origin
+
+git checkout multi-gpu-dev
+
+git reset --hard origin/multi-gpu-dev
+
+chmod +x setup-multi-gpu.sh
+
+./setup-multi-gpu.sh
+
+node --check gpu-affinity.js
+node --check multi-gpu.js
+node --check miner.js
+
+node multi-gpu.js --map
+
+node multi-gpu.js --probe
+```
+
+Do not start experimental multi-GPU mining until the requested GPUs pass the affinity probe.
+
+For experimental testing only:
+
+```bash
+node multi-gpu.js --mine --gpus 0,1 --allow-unpartitioned
+```
+
+The `--allow-unpartitioned` flag exists because the live Unicred work-generation strategy has not yet been fully verified for deterministic multi-worker partitioning.
