@@ -80,41 +80,8 @@ echo "[4/6] Installing project dependencies..."
 rm -rf node_modules
 npm install
 
-echo "[5/7] Preparing Vulkan layer headers and device chooser..."
+echo "[5/6] Installing Playwright Chromium + remaining system deps..."
 
-# Ubuntu 24.04/Noble currently ships libvulkan-dev but may not ship
-# vulkan-validationlayers-dev in the configured repositories. vkdevicechooser
-# only needs the generated Vulkan layer dispatch header from the Vulkan Loader.
-VK_HEADER="/usr/local/include/vulkan/vk_layer_dispatch_table.h"
-if [[ ! -f "$VK_HEADER" ]]; then
-  echo "Installing Vulkan layer dispatch header..."
-  $SUDO mkdir -p /usr/local/include/vulkan
-  $SUDO curl -fL --retry 3     "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Loader/v1.3.275/loader/generated/vk_layer_dispatch_table.h"     -o "$VK_HEADER"
-fi
-
-if [[ ! -f /usr/include/vulkan/vulkan.h || ! -f /usr/include/vulkan/vk_layer.h || ! -f "$VK_HEADER" ]]; then
-  echo "ERROR: Required Vulkan headers are missing."
-  ls -la /usr/include/vulkan 2>/dev/null || true
-  ls -la /usr/local/include/vulkan 2>/dev/null || true
-  exit 1
-fi
-
-echo "[5/7] Installing Vulkan device-chooser layer..."
-VKCHOOSER_DIR="/opt/vkdevicechooser"
-if [[ ! -d "$VKCHOOSER_DIR/.git" ]]; then
-  $SUDO rm -rf "$VKCHOOSER_DIR"
-  $SUDO git clone --depth 1 https://github.com/aejsmith/vkdevicechooser.git "$VKCHOOSER_DIR"
-fi
-(
-  cd "$VKCHOOSER_DIR"
-  rm -rf builddir
-  meson setup builddir --prefix=/usr -Dc_args=-I/usr/local/include -Dcpp_args=-I/usr/local/include
-
-  meson compile -C builddir
-  $SUDO meson install -C builddir
-)
-
-echo "[6/7] Installing Playwright Chromium + remaining system deps..."
 npx playwright install chromium
 npx playwright install-deps chromium || true
 
@@ -131,7 +98,7 @@ cat > "$CONFIG_DIR/config.env.example" <<'CFG'
 CFG
 chmod 600 "$CONFIG_DIR/config.env.example"
 
-echo "[7/7] Final GPU/Vulkan checks..."
+echo "[6/6] Final GPU/Vulkan checks..."
 echo "--- NVIDIA ---"
 command -v nvidia-smi && nvidia-smi --query-gpu=name,driver_version,memory.total,utilization.gpu --format=csv,noheader || true
 
