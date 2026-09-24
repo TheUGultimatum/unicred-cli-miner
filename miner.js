@@ -230,11 +230,11 @@ async function selectGpuMode(page) {
 
 
 function webGpuInstrumentationScript() {
-  return String.raw\`(()=> {
-    const workerIndex = Number('\${WORKER_INDEX}');
-    const workerCount = Number('\${WORKER_COUNT}');
-    const partitioned = '\${PARTITIONED}' === 'true';
-    const inspectKernel = '\${INSPECT_KERNEL}' === 'true';
+  return String.raw`(()=> {
+    const workerIndex = ${WORKER_INDEX};
+    const workerCount = ${WORKER_COUNT};
+    const partitioned = ${PARTITIONED};
+    const inspectKernel = ${INSPECT_KERNEL};
 
     window.__UNICRED_DEBUG = {
       startedAt: Date.now(),
@@ -413,7 +413,7 @@ function webGpuInstrumentationScript() {
 
     installHooks();
     setInterval(installHooks, 100);
-  })();\`;
+  })();`;
 }
 
 async function main() {
