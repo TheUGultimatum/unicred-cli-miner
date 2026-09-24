@@ -115,7 +115,7 @@ function providerScript() {
 }
 
 function cleanMetric(text, label, patterns) {
-  const compact = text.replace(/\\s+/g, ' ').trim();
+  const compact = text.replace(/\s+/g, ' ').trim();
   for (const pattern of patterns) {
     const m = compact.match(pattern);
     if (m) return m[1].trim();
@@ -123,8 +123,8 @@ function cleanMetric(text, label, patterns) {
   const idx = compact.toUpperCase().indexOf(label.toUpperCase());
   if (idx >= 0) {
     const tail = compact.slice(idx + label.length).trim();
-    if (tail && !/^(STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\\b/i.test(tail)) {
-      return tail.split(/\\b(?:STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\\b/i)[0].trim();
+    if (tail && !/^(STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\b/i.test(tail)) {
+      return tail.split(/\b(?:STREAK|CPU|GPU|EXPECTED|HASHRATE|DIFFICULTY|LIVE RACE)\b/i)[0].trim();
     }
   }
   return 'n/a';
@@ -133,21 +133,20 @@ function cleanMetric(text, label, patterns) {
 function extractStats(text) {
   return {
     hashrate: cleanMetric(text, 'HASHRATE', [
-      /HASHRATE\\s*[:|]?\\s*(\\d+(?:\\.\\d+)?)\\s*(GH\\/s|MH\\/s|KH\\/s|H\\/s)/i
-    ].map(r => new RegExp(r.source, 'i'))),
+      /HASHRATE\s*[:|]?\s*(\d+(?:\.\d+)?)\s*(GH\/s|MH\/s|KH\/s|H\/s)/i
+    ]),
     expected: cleanMetric(text, 'EXPECTED', [
-      /EXPECTED\\s*[:|]?\\s*([^|\\n]+?)(?=\\s+(?:STREAK|CPU|GPU|LIVE RACE|$))/i,
-      /EXPECTED\\s*[:|]?\\s*(~?\\d+(?:\\.\\d+)?\\s*(?:ms|s|sec|secs|seconds|min|mins|minutes|h|hr|hours))/i
+      /EXPECTED\s*[:|]?\s*([^|\n]+?)(?=\s+(?:STREAK|CPU|GPU|LIVE RACE|$))/i,
+      /EXPECTED\s*[:|]?\s*(~?\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds|min|mins|minutes|h|hr|hours))/i
     ]),
     streak: cleanMetric(text, 'STREAK', [
-      /STREAK\\s*[:|]?\\s*([^|\\n]+?)(?=\\s+(?:CPU|GPU|LIVE RACE|$))/i
+      /STREAK\s*[:|]?\s*([^|\n]+?)(?=\s+(?:CPU|GPU|LIVE RACE|$))/i
     ]),
     difficulty: cleanMetric(text, 'DIFFICULTY', [
-      /DIFFICULTY\\s*[:|]?\\s*([^|\\n]+?)(?=\\s+(?:PRESS START|CPU|GPU|LIVE RACE|$))/i
+      /DIFFICULTY\s*[:|]?\s*([^|\n]+?)(?=\s+(?:PRESS START|CPU|GPU|LIVE RACE|$))/i
     ])
   };
 }
-
 
 async function selectGpuMode(page) {
   if (!FORCE_GPU_MODE) return;
