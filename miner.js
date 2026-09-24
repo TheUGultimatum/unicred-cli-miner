@@ -231,24 +231,29 @@ async function main() {
   }
   console.log('Mode: ' + (DRY_RUN ? 'DRY RUN' : AUTO_SUBMIT ? 'AUTO-SUBMIT' : 'FIND ONLY'));
 
-  let wallet;
-  if (AUTO_SUBMIT) {
-    if (!process.env.UNICRED_PRIVATE_KEY) die('For --submit, set UNICRED_PRIVATE_KEY.');
-    wallet = new ethers.Wallet(validatePrivateKey(process.env.UNICRED_PRIVATE_KEY));
-  } else if (process.env.UNICRED_PRIVATE_KEY) {
-    wallet = new ethers.Wallet(validatePrivateKey(process.env.UNICRED_PRIVATE_KEY));
-  } else {
-    wallet = ethers.Wallet.createRandom();
-    console.log('Dry-run wallet: ' + wallet.address);
-  }
-
   const rpc = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, {staticNetwork:true});
   const network = await rpc.getNetwork();
   if (Number(network.chainId) !== CHAIN_ID) {
     die('Wrong RPC chainId ' + network.chainId + '; expected ' + CHAIN_ID);
   }
 
+  let wallet;
+  if (AUTO_SUBMIT) {
+    if (!process.env.UNICRED_PRIVATE_KEY) die('For --submit, set UNICRED_PRIVATE_KEY.');
+    wallet = new ethers.Wallet(validatePrivateKey(process.env.UNICRED_PRIVATE_KEY), rpc);
+  } else if (process.env.UNICRED_PRIVATE_KEY) {
+    wallet = new ethers.Wallet(validatePrivateKey(process.env.UNICRED_PRIVATE_KEY), rpc);
+  } else {
+    wallet = ethers.Wallet.createRandom(rpc);
+    console.log('Dry-run wallet: ' + wallet.address);
+  }
+
   console.log('Wallet: ' + wallet.address);
+  if (AUTO_SUBMIT) {
+    const balance = await rpc.getBalance(wallet.address);
+    console.log('[MINT] Unichain balance: ' + ethers.formatEther(balance) + ' ETH');
+    console.log('[MINT] Signer provider: attached to Unichain RPC');
+  }
 
   const xvfb = !HEADLESS ? startVirtualDisplay() : null;
   console.log('DISPLAY:', process.env.DISPLAY || 'unset', '| Chromium mode:', HEADLESS ? 'headless' : 'X11/virtual-display');
